@@ -18,6 +18,9 @@ Run `slack-tools --help` or `slack-tools <command> --help` for usage details.
 | `slack-tools thread <channel> <thread_ts>` | 스레드 전체 조회 | Bot |
 | `slack-tools post <channel> "메시지"` | 메시지 전송 | Bot |
 | `slack-tools reply <channel> <thread_ts> "메시지"` | 스레드 답장 | Bot |
+| `slack-tools users [-q "이름"]` | 사용자 목록/검색 | Bot |
+| `slack-tools channels [-q "이름"] [-p]` | 채널 목록 (--private 포함 가능) | Bot |
+| `slack-tools usergroups [-m]` | 유저그룹 목록 (--members 포함 가능) | Bot |
 
 ## Search Modifiers
 

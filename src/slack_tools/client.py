@@ -51,3 +51,25 @@ def resolve_channel(client: WebClient, channel: str) -> str:
             return ch["id"]
     print(f"Error: channel '{channel}' not found", file=sys.stderr)
     sys.exit(1)
+
+
+def resolve_user(client: WebClient, user: str) -> str:
+    """Resolve a @display-name to a user ID. Pass-through if already an ID."""
+    if user.startswith("U") and user[1:].isalnum():
+        return user
+    name = user.lstrip("@").lower()
+    cursor = None
+    while True:
+        resp = client.users_list(limit=200, cursor=cursor or "")
+        for u in resp["members"]:
+            if (
+                u.get("name", "").lower() == name
+                or u.get("real_name", "").lower() == name
+                or u.get("profile", {}).get("display_name", "").lower() == name
+            ):
+                return u["id"]
+        cursor = resp.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+    print(f"Error: user '{user}' not found", file=sys.stderr)
+    sys.exit(1)

@@ -86,5 +86,45 @@ def reply(channel: str, thread_ts: str, text: str):
     click.echo(reply_message(get_bot_client(), channel, thread_ts, text))
 
 
+@main.command()
+@click.option("--query", "-q", default=None, help="Filter by name/email substring")
+def users(query: str | None):
+    """List workspace users (requires SLACK_BOT_TOKEN).
+
+    Excludes deleted users and bots. Use --query to filter.
+    """
+    from slack_tools.client import get_bot_client
+    from slack_tools.queries import list_users
+
+    click.echo(list_users(get_bot_client(), query=query))
+
+
+@main.command()
+@click.option("--query", "-q", default=None, help="Filter by channel name substring")
+@click.option("--private", "-p", is_flag=True, help="Include private channels")
+def channels(query: str | None, private: bool):
+    """List workspace channels (requires SLACK_BOT_TOKEN).
+
+    Excludes archived channels. Sorted by member count.
+    """
+    from slack_tools.client import get_bot_client
+    from slack_tools.queries import list_channels
+
+    click.echo(list_channels(get_bot_client(), query=query, include_private=private))
+
+
+@main.command()
+@click.option("--members", "-m", is_flag=True, help="Include member user IDs")
+def usergroups(members: bool):
+    """List usergroups / handles (requires SLACK_BOT_TOKEN).
+
+    Shows active usergroups. Use --members to include member lists.
+    """
+    from slack_tools.client import get_bot_client
+    from slack_tools.queries import list_usergroups
+
+    click.echo(list_usergroups(get_bot_client(), include_members=members))
+
+
 if __name__ == "__main__":
     main()

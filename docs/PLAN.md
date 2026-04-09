@@ -44,10 +44,10 @@ slack-tools/
 - [x] CLAUDE.md
 
 ### Phase 2: 사용자 정보 & 채널 조회
-- [ ] `users` — 사용자 목록/검색 (이름 → ID 변환용)
-- [ ] `channels` — 채널 목록 (이름, ID, member count)
-- [ ] `usergroups` — 사용자 그룹 목록 및 멤버 조회
-- [ ] client.py에 `resolve_user(name_or_id)` 헬퍼 추가
+- [x] `users` — 사용자 목록/검색 (이름 → ID 변환용)
+- [x] `channels` — 채널 목록 (이름, ID, member count)
+- [x] `usergroups` — 사용자 그룹 목록 및 멤버 조회
+- [x] client.py에 `resolve_user(name_or_id)` 헬퍼 추가
 
 ### Phase 3: 추가 액션
 - [ ] `react` — 이모지 리액션 추가/제거
