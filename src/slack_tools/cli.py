@@ -28,9 +28,10 @@ def search(query: str, count: int, sort: str):
 
 @main.command()
 @click.argument("channel")
-@click.option("--since", "-s", default=None, help="Time window: 30m, 2h, 1d")
-@click.option("--limit", "-l", default=50, help="Max messages (default 50)")
-def history(channel: str, since: str | None, limit: int):
+@click.option("--since", "-s", default=None, help="Start: 30m, 2h, 1d or 2026-04-02")
+@click.option("--until", "-u", default=None, help="End: 30m, 2h, 1d or 2026-04-02")
+@click.option("--limit", "-l", default=50, help="Max messages (default 50, 0=all)")
+def history(channel: str, since: str | None, until: str | None, limit: int):
     """Fetch recent messages from a channel.
 
     CHANNEL can be a channel ID (C0123...) or #channel-name.
@@ -38,7 +39,7 @@ def history(channel: str, since: str | None, limit: int):
     from slack_tools.client import get_bot_client
     from slack_tools.queries import channel_history
 
-    click.echo(channel_history(get_bot_client(), channel, since=since, limit=limit))
+    click.echo(channel_history(get_bot_client(), channel, since=since, until=until, limit=limit))
 
 
 @main.command()

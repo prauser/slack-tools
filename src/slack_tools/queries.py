@@ -42,6 +42,7 @@ def channel_history(
     client: WebClient,
     channel: str,
     since: str | None = None,
+    until: str | None = None,
     limit: int = 50,
 ) -> str:
     """Fetch recent messages from a channel.
@@ -51,28 +52,45 @@ def channel_history(
     channel : str
         Channel ID or #channel-name.
     since : str or None
-        Time window like "1h", "2d", "30m". If None, fetch latest messages.
+        Start of time window. Relative ("1h", "2d", "30m") or absolute
+        ("2026-04-02", "2026-04-02T09:00:00"). If None, no lower bound.
+    until : str or None
+        End of time window. Same formats as *since*.
+        If None, fetch up to the latest messages.
     limit : int
         Max messages to return (default 50).
     """
     channel_id = resolve_channel(client, channel)
+    fetch_all = limit == 0
 
-    kwargs: dict = {"channel": channel_id, "limit": limit}
+    kwargs: dict = {"channel": channel_id, "limit": min(limit, 200) if not fetch_all else 200}
     if since:
-        oldest = _parse_since(since)
+        oldest = _parse_time(since)
         if oldest:
             kwargs["oldest"] = str(oldest)
+    if until:
+        latest = _parse_time(until)
+        if latest:
+            kwargs["latest"] = str(latest)
 
-    resp = client.conversations_history(**kwargs)
     messages = []
-    for m in resp.get("messages", []):
-        messages.append({
-            "ts": m.get("ts"),
-            "user": m.get("user", ""),
-            "text": m.get("text", ""),
-            "thread_ts": m.get("thread_ts"),
-            "reply_count": m.get("reply_count", 0),
-        })
+    while True:
+        resp = client.conversations_history(**kwargs)
+        for m in resp.get("messages", []):
+            messages.append({
+                "ts": m.get("ts"),
+                "user": m.get("user", ""),
+                "text": m.get("text", ""),
+                "thread_ts": m.get("thread_ts"),
+                "reply_count": m.get("reply_count", 0),
+            })
+        if not fetch_all or not resp.get("has_more"):
+            break
+        cursor = resp.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+        kwargs["cursor"] = cursor
+
     # Chronological order (oldest first)
     messages.reverse()
     return json.dumps(messages, indent=2, ensure_ascii=False)
@@ -197,19 +215,42 @@ def list_usergroups(client: WebClient, include_members: bool = False) -> str:
     return json.dumps(groups, indent=2, ensure_ascii=False)
 
 
-def _parse_since(since: str) -> float | None:
-    """Convert a relative time string (e.g. '2h', '30m', '1d') to a Unix timestamp."""
-    since = since.strip().lower()
+def _parse_time(value: str) -> float | None:
+    """Convert a time string to a Unix timestamp.
+
+    Accepts relative durations ("30m", "2h", "1d") and absolute timestamps
+    ("2026-04-02", "2026-04-02T09:00:00", "2026-04-02T09:00:00+09:00").
+    """
+    value = value.strip()
     now = datetime.now(timezone.utc)
+
+    # Relative: "30m", "2h", "14d"
+    lowered = value.lower()
     try:
-        if since.endswith("m"):
-            delta = timedelta(minutes=int(since[:-1]))
-        elif since.endswith("h"):
-            delta = timedelta(hours=int(since[:-1]))
-        elif since.endswith("d"):
-            delta = timedelta(days=int(since[:-1]))
-        else:
-            return None
-        return (now - delta).timestamp()
+        if lowered.endswith("m"):
+            return (now - timedelta(minutes=int(lowered[:-1]))).timestamp()
+        if lowered.endswith("h"):
+            return (now - timedelta(hours=int(lowered[:-1]))).timestamp()
+        if lowered.endswith("d"):
+            return (now - timedelta(days=int(lowered[:-1]))).timestamp()
+    except ValueError:
+        pass
+
+    # Absolute: "2026-04-02" or "2026-04-02T09:00:00" or with timezone
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            continue
+
+    # ISO format with timezone offset (e.g. "2026-04-02T09:00:00+09:00")
+    try:
+        dt = datetime.fromisoformat(value)
+        return dt.timestamp()
     except ValueError:
         return None
+
+
+# Keep backward compatibility
+_parse_since = _parse_time
