@@ -83,6 +83,7 @@ def channel_history(
                 "text": m.get("text", ""),
                 "thread_ts": m.get("thread_ts"),
                 "reply_count": m.get("reply_count", 0),
+                "latest_reply": m.get("latest_reply"),
             })
         if not fetch_all or not resp.get("has_more"):
             break
