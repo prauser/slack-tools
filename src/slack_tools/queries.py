@@ -23,15 +23,38 @@ def search_messages(client: WebClient, query: str, count: int = 20, sort: str = 
     sort : str
         Sort by "timestamp" (default) or "score".
     """
-    resp = client.search_messages(query=query, count=count, sort=sort)
-    matches = resp.get("messages", {}).get("matches", [])
+    # Slack caps a search page at 100 matches, so ``count`` is honoured by walking
+    # pages rather than by asking for a bigger page.  Without this a query whose
+    # total exceeds 100 comes back silently truncated — the caller sees a full-looking
+    # list and no indication that the tail was dropped, which is the worst failure
+    # mode for anything that reasons about "did I miss something".
+    per_page = min(count, 100) if count else 100
+    matches = []
+    page = 1
+    while True:
+        resp = client.search_messages(query=query, count=per_page, sort=sort, page=page)
+        msgs = resp.get("messages", {})
+        matches.extend(msgs.get("matches", []))
+        pages = msgs.get("paging", {}).get("pages", 1) or 1
+        # 10-page ceiling is a runaway guard, not a real limit; widen ``count`` to lift it.
+        if page >= pages or len(matches) >= count or page >= 10:
+            break
+        page += 1
     results = []
-    for m in matches:
+    for m in matches[:count]:
         results.append({
             "ts": m.get("ts"),
             "channel": m.get("channel", {}).get("name", ""),
             "channel_id": m.get("channel", {}).get("id", ""),
-            "user": m.get("username", ""),
+            # ``user`` is the stable Slack user id, ``username`` the display handle.
+            # Both are surfaced because they serve different jobs: filtering by author
+            # needs the id (handles are renameable and bots are absent from
+            # ``users.list``, so an id list is the only reliable allow/deny key),
+            # while humans reading the output need the handle.  Bot posts carry a
+            # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+            # and app/integration posts carry no id at all, only a username.
+            "user": m.get("user", ""),
+            "username": m.get("username", ""),
             "text": m.get("text", ""),
             "permalink": m.get("permalink", ""),
         })
@@ -152,6 +175,42 @@ def list_users(client: WebClient, query: str | None = None) -> str:
         if not cursor:
             break
     return json.dumps(users, indent=2, ensure_ascii=False)
+
+
+def list_dms(client: WebClient, names: dict[str, str] | None = None) -> str:
+    """List the authenticated user's DM conversations.
+
+    Needs a User Token with ``im:read`` — DM channels belong to a person, not to a
+    bot, so a bot token sees only the DMs the bot itself is part of.  DMs are also
+    absent from ``conversations.list`` for public/private types and cannot be
+    resolved by name, which is why their ``D…`` ids have to be listed explicitly
+    before ``history`` can read them.
+
+    Parameters
+    ----------
+    names : dict or None
+        Optional ``user_id -> display name`` map used to label each DM.
+    """
+    dms = []
+    cursor = None
+    while True:
+        resp = client.conversations_list(
+            types="im", limit=200, cursor=cursor or "", exclude_archived=True
+        )
+        for ch in resp["channels"]:
+            if ch.get("is_user_deleted"):
+                continue
+            uid = ch.get("user", "")
+            dms.append({
+                "id": ch["id"],
+                "user": uid,
+                "username": (names or {}).get(uid, ""),
+                "latest": ch.get("latest", {}).get("ts", "") if isinstance(ch.get("latest"), dict) else "",
+            })
+        cursor = resp.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+    return json.dumps(dms, indent=2, ensure_ascii=False)
 
 
 def list_channels(client: WebClient, query: str | None = None, include_private: bool = False) -> str:
