@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import click
+
+if TYPE_CHECKING:
+    from slack_sdk import WebClient
 
 
 @click.group()
@@ -26,35 +31,68 @@ def search(query: str, count: int, sort: str):
     click.echo(search_messages(get_user_client(), query, count=count, sort=sort))
 
 
+def _read_client(as_user: bool, channel: str) -> tuple[WebClient, str]:
+    """Pick the client for message reads, plus a pre-resolved channel id.
+
+    Bot token only sees channels the bot was invited to — private channels and
+    ad-hoc channels fail with ``channel_not_found`` / ``not_in_channel``.  The
+    user token sees every channel its owner is in, so ``--as-user`` is the way
+    to read a conversation without inviting the bot first.
+
+    ``#channel-name`` → id resolution still needs ``channels:read``/``groups:read``,
+    which user tokens typically lack, so names are resolved with the bot client.
+    A bare channel id short-circuits ``resolve_channel`` and costs no API call —
+    that path needs no bot token at all, which is the only way to reach a DM
+    (``D...``): DMs never appear in ``conversations.list``, so a name lookup
+    could not find them anyway.
+    """
+    from slack_tools.client import get_bot_client, get_user_client, is_channel_id, resolve_channel
+
+    if not as_user:
+        return get_bot_client(), channel
+    if is_channel_id(channel):
+        return get_user_client(), channel
+    return get_user_client(), resolve_channel(get_bot_client(), channel)
+
+
+_AS_USER_HELP = (
+    "Read with the User Token (xoxp-) instead of the Bot Token. Sees every channel "
+    "you belong to, including private ones, with no bot invite. Needs channels:history, "
+    "groups:history, im:history and mpim:history user scopes."
+)
+
+
 @main.command()
 @click.argument("channel")
 @click.option("--since", "-s", default=None, help="Start: 30m, 2h, 1d or 2026-04-02")
 @click.option("--until", "-u", default=None, help="End: 30m, 2h, 1d or 2026-04-02")
 @click.option("--limit", "-l", default=50, help="Max messages (default 50, 0=all)")
-def history(channel: str, since: str | None, until: str | None, limit: int):
+@click.option("--as-user", is_flag=True, help=_AS_USER_HELP)
+def history(channel: str, since: str | None, until: str | None, limit: int, as_user: bool):
     """Fetch recent messages from a channel.
 
     CHANNEL can be a channel ID (C0123...) or #channel-name.
     """
-    from slack_tools.client import get_bot_client
     from slack_tools.queries import channel_history
 
-    click.echo(channel_history(get_bot_client(), channel, since=since, until=until, limit=limit))
+    client, channel_id = _read_client(as_user, channel)
+    click.echo(channel_history(client, channel_id, since=since, until=until, limit=limit))
 
 
 @main.command()
 @click.argument("channel")
 @click.argument("thread_ts")
-def thread(channel: str, thread_ts: str):
+@click.option("--as-user", is_flag=True, help=_AS_USER_HELP)
+def thread(channel: str, thread_ts: str, as_user: bool):
     """Fetch all replies in a thread.
 
     CHANNEL: channel ID or #channel-name.
     THREAD_TS: timestamp of the parent message.
     """
-    from slack_tools.client import get_bot_client
     from slack_tools.queries import thread_replies
 
-    click.echo(thread_replies(get_bot_client(), channel, thread_ts))
+    client, channel_id = _read_client(as_user, channel)
+    click.echo(thread_replies(client, channel_id, thread_ts))
 
 
 @main.command()
