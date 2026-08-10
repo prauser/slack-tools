@@ -39,9 +39,19 @@ def get_bot_client() -> WebClient:
     return WebClient(token=_require_env("SLACK_BOT_TOKEN"))
 
 
+def is_channel_id(channel: str) -> bool:
+    """True if *channel* is a bare conversation ID rather than a #name.
+
+    Slack prefixes conversation IDs by type: ``C`` public channel, ``G`` private
+    channel / group DM, ``D`` DM.  All three are valid targets for
+    ``conversations.history`` and ``conversations.replies``.
+    """
+    return len(channel) > 1 and channel[0] in "CDG" and channel[1:].isalnum()
+
+
 def resolve_channel(client: WebClient, channel: str) -> str:
     """Resolve a #channel-name to a channel ID. Pass-through if already an ID."""
-    if channel.startswith("C") and channel[1:].isalnum():
+    if is_channel_id(channel):
         return channel
     # Strip leading #
     name = channel.lstrip("#")

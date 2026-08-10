@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import click
+
+if TYPE_CHECKING:
+    from slack_sdk import WebClient
 
 
 @click.group()
@@ -26,7 +31,7 @@ def search(query: str, count: int, sort: str):
     click.echo(search_messages(get_user_client(), query, count=count, sort=sort))
 
 
-def _read_client(as_user: bool, channel: str) -> tuple:
+def _read_client(as_user: bool, channel: str) -> tuple[WebClient, str]:
     """Pick the client for message reads, plus a pre-resolved channel id.
 
     Bot token only sees channels the bot was invited to — private channels and
@@ -37,14 +42,17 @@ def _read_client(as_user: bool, channel: str) -> tuple:
     ``#channel-name`` → id resolution still needs ``channels:read``/``groups:read``,
     which user tokens typically lack, so names are resolved with the bot client.
     A bare channel id short-circuits ``resolve_channel`` and costs no API call —
-    that path needs no bot token at all.
+    that path needs no bot token at all, which is the only way to reach a DM
+    (``D...``): DMs never appear in ``conversations.list``, so a name lookup
+    could not find them anyway.
     """
-    from slack_tools.client import get_bot_client, get_user_client, resolve_channel
+    from slack_tools.client import get_bot_client, get_user_client, is_channel_id, resolve_channel
 
     if not as_user:
         return get_bot_client(), channel
-    is_id = channel.startswith("C") and channel[1:].isalnum()
-    return get_user_client(), channel if is_id else resolve_channel(get_bot_client(), channel)
+    if is_channel_id(channel):
+        return get_user_client(), channel
+    return get_user_client(), resolve_channel(get_bot_client(), channel)
 
 
 _AS_USER_HELP = (

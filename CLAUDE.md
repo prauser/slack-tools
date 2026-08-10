@@ -29,8 +29,11 @@ Run `slack-tools --help` or `slack-tools <command> --help` for usage details.
 봇 관점(봇이 참여한 채널만)으로 충분하면 default 를 쓴다.
 
 **`#채널명` 은 bot token 으로 resolve 된다** (user token 에 보통 `channels:read` 가 없다).
-`C0123...` 형태의 bare id 를 넘기면 `resolve_channel` 이 short-circuit 되어
-bot token 없이도 동작한다.
+bare id (`C...` public / `G...` private·그룹DM / `D...` DM) 를 넘기면
+`resolve_channel` 이 short-circuit 되어 bot token 없이도 동작한다.
+
+**DM 은 반드시 `D...` id 로 넘겨야 한다.** DM 은 `conversations.list` 에 안 나와서
+이름으로 resolve 할 방법이 없다. id 는 `search` 결과의 `channel_id` 에서 얻는다.
 
 **default 를 바꾸지 않은 이유**: 기존 호출자(예: context-central 의 `history`/`thread` cron)
 동작이 변하면 안 된다. opt-in 이어야 한다.
