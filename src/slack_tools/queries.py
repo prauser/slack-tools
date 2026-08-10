@@ -9,6 +9,12 @@ from slack_sdk import WebClient
 
 from slack_tools.client import resolve_channel
 
+# Slack's search API rejects a page larger than 100.
+_SEARCH_PAGE_SIZE = 100
+# Only a backstop for a missing/bogus ``paging.pages``; the reported total is what
+# normally ends the walk.
+_SEARCH_PAGE_GUARD = 100
+
 
 def search_messages(client: WebClient, query: str, count: int = 20, sort: str = "timestamp") -> str:
     """Search messages using Slack's search API (requires user token).
@@ -19,7 +25,8 @@ def search_messages(client: WebClient, query: str, count: int = 20, sort: str = 
         Search query (supports Slack search modifiers like ``in:#channel``,
         ``from:@user``, ``before:2026-01-01``).
     count : int
-        Max results to return (default 20).
+        Max results to return (default 20). ``0`` fetches every match, the same
+        convention ``channel_history`` uses for *limit*.
     sort : str
         Sort by "timestamp" (default) or "score".
     """
@@ -28,20 +35,24 @@ def search_messages(client: WebClient, query: str, count: int = 20, sort: str = 
     # total exceeds 100 comes back silently truncated — the caller sees a full-looking
     # list and no indication that the tail was dropped, which is the worst failure
     # mode for anything that reasons about "did I miss something".
-    per_page = min(count, 100) if count else 100
+    fetch_all = count == 0
+    per_page = _SEARCH_PAGE_SIZE if fetch_all else min(count, _SEARCH_PAGE_SIZE)
     matches = []
     page = 1
     while True:
         resp = client.search_messages(query=query, count=per_page, sort=sort, page=page)
         msgs = resp.get("messages", {})
         matches.extend(msgs.get("matches", []))
+        # Slack reports the page total, so that — not an arbitrary ceiling — is what
+        # ends the walk.  ``_SEARCH_PAGE_GUARD`` only catches a missing/bogus count.
         pages = msgs.get("paging", {}).get("pages", 1) or 1
-        # 10-page ceiling is a runaway guard, not a real limit; widen ``count`` to lift it.
-        if page >= pages or len(matches) >= count or page >= 10:
+        if page >= pages or page >= _SEARCH_PAGE_GUARD:
+            break
+        if not fetch_all and len(matches) >= count:
             break
         page += 1
     results = []
-    for m in matches[:count]:
+    for m in matches if fetch_all else matches[:count]:
         results.append({
             "ts": m.get("ts"),
             "channel": m.get("channel", {}).get("name", ""),
@@ -177,6 +188,28 @@ def list_users(client: WebClient, query: str | None = None) -> str:
     return json.dumps(users, indent=2, ensure_ascii=False)
 
 
+def user_display_names(client: WebClient) -> dict[str, str]:
+    """Map every workspace ``user_id`` to a human-readable name.
+
+    Cursor-paginated like :func:`list_users` — a single ``users.list`` page tops out
+    well below a real workspace, and a partial map shows up as silently unlabelled
+    rows rather than as an error.
+    """
+    names: dict[str, str] = {}
+    cursor = None
+    while True:
+        resp = client.users_list(limit=200, cursor=cursor or "")
+        for u in resp["members"]:
+            profile = u.get("profile", {})
+            names[u["id"]] = (
+                profile.get("display_name") or u.get("real_name") or u.get("name", "")
+            )
+        cursor = resp.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+    return names
+
+
 def list_dms(client: WebClient, names: dict[str, str] | None = None) -> str:
     """List the authenticated user's DM conversations.
 
@@ -201,11 +234,12 @@ def list_dms(client: WebClient, names: dict[str, str] | None = None) -> str:
             if ch.get("is_user_deleted"):
                 continue
             uid = ch.get("user", "")
+            latest = ch.get("latest")
             dms.append({
                 "id": ch["id"],
                 "user": uid,
                 "username": (names or {}).get(uid, ""),
-                "latest": ch.get("latest", {}).get("ts", "") if isinstance(ch.get("latest"), dict) else "",
+                "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
             })
         cursor = resp.get("response_metadata", {}).get("next_cursor")
         if not cursor:

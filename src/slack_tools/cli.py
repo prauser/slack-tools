@@ -18,7 +18,7 @@ def main():
 
 @main.command()
 @click.argument("query")
-@click.option("--count", "-c", default=20, help="Max results (default 20)")
+@click.option("--count", "-c", default=20, help="Max results (default 20, 0=all)")
 @click.option("--sort", "-s", default="timestamp", type=click.Choice(["timestamp", "score"]))
 def search(query: str, count: int, sort: str):
     """Search messages (requires SLACK_USER_TOKEN).
@@ -153,7 +153,9 @@ def channels(query: str | None, private: bool):
 
 
 @main.command()
-@click.option("--resolve-names", "-n", is_flag=True, help="Label each DM with the counterpart's name")
+@click.option(
+    "--resolve-names", "-n", is_flag=True, help="Label each DM with the counterpart's name"
+)
 def dms(resolve_names: bool):
     """List your DM conversations (requires SLACK_USER_TOKEN with im:read).
 
@@ -161,16 +163,10 @@ def dms(resolve_names: bool):
     `D...` ids printed here with `history --as-user`.
     """
     from slack_tools.client import get_bot_client, get_user_client
-    from slack_tools.queries import list_dms
+    from slack_tools.queries import list_dms, user_display_names
 
-    names = None
-    if resolve_names:
-        # users.list is a bot scope (users:read); the DM list itself is user-scoped.
-        resp = get_bot_client().users_list(limit=500)
-        names = {
-            u["id"]: (u.get("profile", {}).get("display_name") or u.get("real_name") or u.get("name", ""))
-            for u in resp.get("members", [])
-        }
+    # users.list is a bot scope (users:read); the DM list itself is user-scoped.
+    names = user_display_names(get_bot_client()) if resolve_names else None
     click.echo(list_dms(get_user_client(), names=names))
 
 
