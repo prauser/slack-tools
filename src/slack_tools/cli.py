@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import click
@@ -181,6 +182,56 @@ def usergroups(members: bool):
     from slack_tools.queries import list_usergroups
 
     click.echo(list_usergroups(get_bot_client(), include_members=members))
+
+
+@main.group()
+def lists():
+    """Slack Lists commands (requires SLACK_USER_TOKEN with lists:read)."""
+
+
+@lists.command(name="items")
+@click.argument("list_id")
+@click.option("--limit", "-l", default=0, help="Max items (default 0=all)")
+def lists_items(list_id: str, limit: int):
+    """Fetch items from a Slack List (requires SLACK_USER_TOKEN with lists:read).
+
+    LIST_ID can be a bare list id (F...) or the full Slack Lists URL.
+    Bot token is not an option here — this API returns list_not_found for it.
+    """
+    from slack_tools.client import get_user_client, parse_list_id
+    from slack_tools.queries import list_items
+
+    # Let queries.list_items keep raising (it stays a plain, testable library
+    # call) — this is the CLI boundary that turns that into the repo's usual
+    # one-line-stderr-and-exit convention (see client.py's _require_env /
+    # resolve_channel / resolve_user) instead of a raw traceback.
+    try:
+        click.echo(list_items(get_user_client(), parse_list_id(list_id), limit=limit))
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
+
+@lists.command(name="comments")
+@click.argument("list_id")
+@click.option("--limit", "-l", default=0, help="Max top-level messages (default 0=all)")
+def lists_comments(list_id: str, limit: int):
+    """Fetch comments on a Slack List (requires SLACK_USER_TOKEN with lists:read).
+
+    LIST_ID can be a bare list id (F...) or the full Slack Lists URL. Comments
+    are read from a pseudo-channel id derived from the list id (F -> C swap),
+    observed on one list only — see CLAUDE.md's Slack Lists section.
+    """
+    from slack_tools.client import get_user_client, parse_list_id
+    from slack_tools.queries import list_comments
+
+    # Same CLI-boundary convention as lists_items above — queries.list_comments
+    # keeps raising for library callers/tests, this just presents it cleanly.
+    try:
+        click.echo(list_comments(get_user_client(), parse_list_id(list_id), limit=limit))
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

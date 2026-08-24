@@ -58,6 +58,18 @@ bare id (`C...` public / `G...` private·그룹DM / `D...` DM) 를 넘기면
 **default 를 바꾸지 않은 이유**: 기존 호출자(예: context-central 의 `history`/`thread` cron)
 동작이 변하면 안 된다. opt-in 이어야 한다.
 
+## Slack Lists (`lists:read`)
+
+`lists items <LIST>` / `lists comments <LIST>` read Slack Lists. `<LIST>` accepts either
+a bare list id (`F...`) or the full Slack Lists URL (the id is the last path segment).
+
+| 사실 | 왜 중요한가 |
+|---|---|
+| **USER 토큰(xoxp-) 전용.** `--as-user` 옵션이 없다 — 이 명령군은 유저 토큰이 유일한 선택지다. | BOT 토큰은 `list_not_found` 로 실패한다 (리스트가 다른 워크스페이스 소속일 수 있어서). 조용한 0건이 아니라 stderr 한 줄 메시지와 함께 에러로 죽는다 — 그래도 토큰을 잘못 고르기 쉬운 지점이라 표로 남긴다. |
+| `slackLists.info` API가 없다. | **컬럼의 사람이 읽을 이름을 얻을 방법이 없다.** 출력은 `column_id` 로만 필드를 식별한다 — 이름을 지어내지 않는다. |
+| 값이 빈 필드는 API 응답의 `fields` 배열에서 아예 빠진다. | "담당자 미지정" 같은 판정은 그 `column_id` 의 **부재**로 해야 한다. item 마다 `fields` 길이가 다른 게 정상이다. |
+| `lists comments` 의 코멘트 채널 id 는 리스트 id 의 첫 글자를 `F`→`C` 로 바꿔 유도한다. | **리스트 1건에서만 관측**했다 — 문서화된 규칙이 아니다. 출력에 `comment_channel`/`derived` 를 항상 넣고, 채널 조회가 실패하면 조용히 빈 배열을 주지 않고 에러로 죽는다. |
+
 ## Search Modifiers
 
 Slack 검색 문법 사용 가능:
