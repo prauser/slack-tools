@@ -311,9 +311,13 @@ def list_usergroups(client: WebClient, include_members: bool = False) -> str:
 
 class _CommentChannelUnreachable(RuntimeError):
     """Raised by ``list_comments`` when the derived F->C pseudo-channel can't be
-    read. A dedicated type (rather than a bare ``RuntimeError``) lets the
-    function's own except-block tell "already formatted by us" apart from a raw
-    client-level exception it still needs to wrap exactly once.
+    read.
+
+    A ``RuntimeError`` subclass so the CLI boundary keeps turning it into the
+    repo's one-line-stderr-and-exit convention, but a distinct type so a caller
+    or test can tell "the derived channel guess did not resolve" apart from any
+    other ``RuntimeError``. Nothing catches it inside this module — the message
+    is built once, at the raise site.
     """
 
 
@@ -443,6 +447,16 @@ def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
     limit : int
         Max top-level messages to return (default 0 = all).
     """
+    # The F->C swap is a blind string edit, so a non-list id has to be rejected
+    # here rather than derived from. A channel id (``C...``) would survive the
+    # swap unchanged and this would happily return that channel's real messages
+    # labelled as list comments -- wrong output presented as correct, which is
+    # worse than an error.
+    if not (len(list_id) > 1 and list_id[0] == "F" and list_id[1:].isalnum()):
+        raise RuntimeError(
+            f"Error: {list_id!r} is not a Slack List id. Expected an id starting "
+            "with 'F' (or a Slack Lists URL to parse one from)."
+        )
     comment_channel = "C" + list_id[1:]
     fetch_all = limit == 0
     kwargs: dict = {"channel": comment_channel, "limit": min(limit, 200) if not fetch_all else 200}
@@ -466,14 +480,38 @@ def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
             _fail(resp.get("error", "unknown_error"))
         return resp
 
-    def _replies(ts: str) -> dict:
+    def _replies_page(ts: str, cursor: str) -> dict:
+        kw: dict = {"channel": comment_channel, "ts": ts, "limit": 200}
+        if cursor:
+            kw["cursor"] = cursor
         try:
-            resp = client.conversations_replies(channel=comment_channel, ts=ts, limit=200)
+            resp = client.conversations_replies(**kw)
         except Exception as exc:  # noqa: BLE001 — converted to the loud, labelled failure below
             _fail(str(exc))
         if not resp.get("ok", True):
             _fail(resp.get("error", "unknown_error"))
         return resp
+
+    def _replies(ts: str) -> list[dict]:
+        """Walk every page of a comment thread.
+
+        conversations.replies caps a page at 200. Stopping there dropped reply
+        201 onward with no signal -- the only trace was reply_count disagreeing
+        with len(replies), which nothing surfaced. The top-level loop already
+        walks its cursor; this is the same walk one level down.
+        """
+        out: list[dict] = []
+        cursor = ""
+        while True:
+            resp = _replies_page(ts, cursor)
+            out.extend(
+                {"ts": r.get("ts"), "user": r.get("user", ""), "text": r.get("text", "")}
+                for r in resp.get("messages", [])
+                if r.get("ts") != ts
+            )
+            cursor = resp.get("response_metadata", {}).get("next_cursor", "")
+            if not cursor:
+                return out
 
     while True:
         resp = _history(**kwargs)
@@ -486,12 +524,7 @@ def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
                 "replies": [],
             }
             if m.get("reply_count", 0) > 0:
-                replies_resp = _replies(m["ts"])
-                entry["replies"] = [
-                    {"ts": r.get("ts"), "user": r.get("user", ""), "text": r.get("text", "")}
-                    for r in replies_resp.get("messages", [])
-                    if r.get("ts") != m.get("ts")
-                ]
+                entry["replies"] = _replies(m["ts"])
             messages.append(entry)
             # Same "walk until satisfied, then trim" shape as list_items — a
             # single-page shortcut here would silently truncate a bounded

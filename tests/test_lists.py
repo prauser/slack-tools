@@ -548,3 +548,87 @@ class TestListsCli:
 
         assert result.exit_code == 0, result.output
         assert "--limit" in result.output
+
+
+class TestListCommentsRepliesPagination:
+    """conversations.replies caps a page at 200. Stopping there dropped reply 201
+    onward with nothing in the output saying so — the only trace was reply_count
+    disagreeing with len(replies), which no caller was told to check.
+    """
+
+    @staticmethod
+    def _thread(reply_count: int, *reply_pages):
+        client = MagicMock()
+        client.conversations_history.return_value = {
+            "ok": True,
+            "messages": [
+                {"ts": "1.0", "user": "USLACKBOT", "text": "A comment was added",
+                 "reply_count": reply_count}
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+        client.conversations_replies.side_effect = _pages(*reply_pages)
+        return client
+
+    @staticmethod
+    def _reply_page(lo: int, hi: int, next_cursor: str = "", with_parent: bool = False):
+        msgs = [{"ts": "1.0", "user": "U1", "text": "parent"}] if with_parent else []
+        msgs += [{"ts": f"1.{i}", "user": "U9", "text": f"r{i}"} for i in range(lo, hi + 1)]
+        return {"ok": True, "messages": msgs,
+                "response_metadata": {"next_cursor": next_cursor}}
+
+    def test_walks_every_reply_page_instead_of_truncating_at_one(self):
+        client = self._thread(
+            250,
+            self._reply_page(1, 200, next_cursor="MORE", with_parent=True),
+            self._reply_page(201, 250),
+        )
+        result = json.loads(list_comments(client, "F0BG5933VUY"))
+        replies = result["messages"][0]["replies"]
+
+        assert client.conversations_replies.call_count == 2
+        assert len(replies) == 250 == result["messages"][0]["reply_count"]
+        assert replies[-1]["text"] == "r250"
+
+    def test_the_thread_parent_is_excluded_on_every_page(self):
+        client = self._thread(
+            3,
+            self._reply_page(1, 2, next_cursor="MORE", with_parent=True),
+            self._reply_page(3, 3, with_parent=True),
+        )
+        result = json.loads(list_comments(client, "F0BG5933VUY"))
+        replies = result["messages"][0]["replies"]
+
+        assert [r["ts"] for r in replies] == ["1.1", "1.2", "1.3"]
+
+    def test_a_reply_page_that_is_not_ok_still_fails_loudly(self):
+        client = self._thread(
+            250,
+            self._reply_page(1, 200, next_cursor="MORE", with_parent=True),
+            {"ok": False, "error": "channel_not_found"},
+        )
+        with pytest.raises(RuntimeError, match="not reachable"):
+            list_comments(client, "F0BG5933VUY")
+
+
+class TestListCommentsRejectsNonListIds:
+    """The F->C swap is a blind string edit. A channel id survives it unchanged,
+    so without this guard the command read that channel and returned its real
+    messages labelled as list comments — wrong output presented as correct.
+    """
+
+    @pytest.mark.parametrize("bad_id", ["C0ABCDEF", "D0ABCDEF", "", "F", "not-an-id"])
+    def test_refuses_anything_that_is_not_a_list_id(self, bad_id):
+        client = MagicMock()
+        with pytest.raises(RuntimeError, match="not a Slack List id"):
+            list_comments(client, bad_id)
+        client.conversations_history.assert_not_called()
+
+    def test_a_real_list_id_still_derives_the_comment_channel(self):
+        client = MagicMock()
+        client.conversations_history.return_value = {
+            "ok": True, "messages": [], "response_metadata": {"next_cursor": ""},
+        }
+        result = json.loads(list_comments(client, "F0BG5933VUY"))
+        assert result["comment_channel"] == "C0BG5933VUY"
+        assert result["derived"] is True
