@@ -59,11 +59,22 @@ def parse_list_id(value: str) -> str:
     slash too) — those have to be stripped *before* taking the last path
     segment, or the id comes back mangled (``"F...?tab=all"``) or, with a
     trailing slash, lost entirely (``"?tab=all"``).
+
+    Raises ``RuntimeError`` if the last path segment doesn't look like a list
+    id. Without this, a URL with an empty last segment (e.g. a trailing slash
+    right after the team id, ``.../lists/T0GCQMN07/``) silently returns the
+    *team* id instead — a wrong-but-plausible-looking id is worse than an
+    obviously bad one, because it survives unnoticed into whichever query
+    function is called next and fails there with a confusing, unrelated error.
     """
     value = value.strip().split("?", 1)[0].split("#", 1)[0].rstrip("/")
-    if "/" in value:
-        return value.rsplit("/", 1)[-1]
-    return value
+    candidate = value.rsplit("/", 1)[-1] if "/" in value else value
+    if not (len(candidate) > 1 and candidate[0] == "F" and candidate[1:].isalnum()):
+        raise RuntimeError(
+            f"Error: could not find a Slack List id in {value!r}. Expected an id "
+            "starting with 'F' as the last path segment of the URL, or a bare id."
+        )
+    return candidate
 
 
 def resolve_channel(client: WebClient, channel: str) -> str:

@@ -191,7 +191,9 @@ def lists():
 
 @lists.command(name="items")
 @click.argument("list_id")
-@click.option("--limit", "-l", default=0, help="Max items (default 0=all)")
+@click.option(
+    "--limit", "-l", default=0, type=click.IntRange(min=0), help="Max items (default 0=all)"
+)
 def lists_items(list_id: str, limit: int):
     """Fetch items from a Slack List (requires SLACK_USER_TOKEN with lists:read).
 
@@ -205,6 +207,16 @@ def lists_items(list_id: str, limit: int):
     # call) — this is the CLI boundary that turns that into the repo's usual
     # one-line-stderr-and-exit convention (see client.py's _require_env /
     # resolve_channel / resolve_user) instead of a raw traceback.
+    #
+    # Only RuntimeError is caught here, deliberately: that's this repo's signal
+    # for an *expected* failure (bad input, unreachable resource, upstream API
+    # error). A KeyError/TypeError/etc. out of the query layer is a programming
+    # bug, not an expected failure, and is left to propagate as a real traceback
+    # instead of being collapsed into the same one-line message — see
+    # queries.list_comments' docstring and tests/test_lists.py's
+    # test_a_local_bug_does_not_get_mislabeled_as_channel_not_reachable /
+    # test_comments_command_lets_an_unexpected_local_bug_raise_a_traceback for
+    # why hiding that traceback would cost more than the rough CLI output does.
     try:
         click.echo(list_items(get_user_client(), parse_list_id(list_id), limit=limit))
     except RuntimeError as exc:
@@ -214,7 +226,13 @@ def lists_items(list_id: str, limit: int):
 
 @lists.command(name="comments")
 @click.argument("list_id")
-@click.option("--limit", "-l", default=0, help="Max top-level messages (default 0=all)")
+@click.option(
+    "--limit",
+    "-l",
+    default=0,
+    type=click.IntRange(min=0),
+    help="Max top-level messages (default 0=all)",
+)
 def lists_comments(list_id: str, limit: int):
     """Fetch comments on a Slack List (requires SLACK_USER_TOKEN with lists:read).
 
@@ -227,6 +245,7 @@ def lists_comments(list_id: str, limit: int):
 
     # Same CLI-boundary convention as lists_items above — queries.list_comments
     # keeps raising for library callers/tests, this just presents it cleanly.
+    # See lists_items' comment above for why only RuntimeError is caught here.
     try:
         click.echo(list_comments(get_user_client(), parse_list_id(list_id), limit=limit))
     except RuntimeError as exc:

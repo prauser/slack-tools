@@ -321,9 +321,12 @@ class _CommentChannelUnreachable(RuntimeError):
     """
 
 
-# Type keys Slack attaches to a field alongside its raw ``value``. Order matters:
-# a field can legitimately carry both "text" and "rich_text" (see the real payload
-# in task-1's 실측 사실), and "text" is the one worth surfacing as the value.
+# Type keys Slack attaches to a field alongside its raw ``value``. Only the first
+# two entries' relative order is measured: a field can legitimately carry both
+# "text" and "rich_text" (see the real payload in task-1's 실측 사실), and "text"
+# is the one worth surfacing as the value. The order of the remaining entries is
+# an arbitrary tie-break, not an observed fact — no payload seen so far has
+# carried more than one of them on the same field.
 _FIELD_TYPE_KEYS = (
     ("text", "text"),
     ("rich_text", "text"),
@@ -375,12 +378,63 @@ def _normalize_list_item(item: dict) -> dict:
     }
 
 
+def _validate_limit(limit: int) -> None:
+    """Reject a negative *limit* before it reaches any pagination arithmetic.
+
+    The CLI also rejects a negative ``--limit`` via ``click.IntRange(min=0)``,
+    but that only protects callers going through the CLI. A library caller
+    invoking ``list_items``/``list_comments`` directly could still pass a raw
+    negative value through; without this, ``list_comments`` in particular
+    would forward it to ``conversations.history``, which errors there, and
+    that error gets picked up by ``_history``'s client-exception guard and
+    relabeled as "comment channel not reachable ... F→C mapping" — blaming an
+    unrelated mechanism for what is actually a bad argument. Validating here,
+    in the logic layer, gives every caller (CLI or library) the same
+    guarantee regardless of entry point.
+    """
+    if limit < 0:
+        raise RuntimeError(f"Error: limit must be >= 0 (0 means 'all'), got {limit}")
+
+
 # The real WebClient raises (SlackApiError) on a logical (ok:false) failure
 # instead of ever handing back the dict — see the ``try/except`` below, which
 # is the only place that failure signal is actually observed in production.
 # No documented page-size cap for this endpoint; capped at the same 200 used
 # by conversations.history / conversations.replies for consistency.
 _LIST_ITEMS_PAGE_SIZE = 200
+
+
+def _required_list(resp: dict, key: str, context: str) -> list:
+    """Return ``resp[key]``, raising if *key* is absent or ``null`` in an
+    ``ok:true`` response.
+
+    Three response shapes are possible for a collection key, and only one of
+    them is "genuinely empty":
+
+    - ``key: []`` — a real, empty result. Returned as-is.
+    - key missing entirely — never observed from Slack for these endpoints, so
+      treated as a malformed/unexpected response rather than silently read as
+      empty (``resp.get(key, [])`` would hide this behind a false all-clear).
+    - ``key: null`` — also never observed. Nothing distinguishes "the API
+      explicitly means nothing here" from "something went wrong upstream", and
+      Slack's own convention for "nothing" elsewhere in these responses is an
+      empty list, not ``null``. Read the same way as a missing key rather than
+      silently treated as ``[]`` — a bare ``TypeError: NoneType is not
+      iterable`` at the call site would be even less informative, and (being
+      neither a caught ``RuntimeError`` nor a documented local bug) would reach
+      the CLI user as an unlabelled traceback instead of the one-line error
+      this helper exists to produce.
+    """
+    if key not in resp:
+        raise RuntimeError(
+            f"Error: {context} response has ok:true but no {key!r} key: {resp!r}"
+        )
+    value = resp[key]
+    if value is None:
+        raise RuntimeError(
+            f"Error: {context} response has ok:true but {key!r} is null, not a list: {resp!r}"
+        )
+    return value
 
 
 def list_items(client: WebClient, list_id: str, limit: int = 0) -> str:
@@ -398,13 +452,21 @@ def list_items(client: WebClient, list_id: str, limit: int = 0) -> str:
         Max items to return (default 0 = walk every page, the same ``0 = all``
         convention as ``channel_history``/``search_messages``).
     """
+    _validate_limit(limit)
     fetch_all = limit == 0
     raw_items: list[dict] = []
     cursor = ""
     while True:
+        # Every sibling loop in this module sends an explicit page size, on both
+        # the walk-all and the bounded path; this one now matches. On the bounded
+        # path the size is recomputed from what's still needed each iteration
+        # (not from the original *limit*), so the last page isn't over-fetched.
         params: dict = {"list_id": list_id, "cursor": cursor}
-        if not fetch_all:
-            params["limit"] = min(limit, _LIST_ITEMS_PAGE_SIZE)
+        if fetch_all:
+            params["limit"] = _LIST_ITEMS_PAGE_SIZE
+        else:
+            remaining = limit - len(raw_items)
+            params["limit"] = min(remaining, _LIST_ITEMS_PAGE_SIZE)
         try:
             # SlackApiError isn't a RuntimeError, and the CLI boundary only catches
             # RuntimeError, so this call needs its own net rather than relying on
@@ -420,7 +482,7 @@ def list_items(client: WebClient, list_id: str, limit: int = 0) -> str:
                 f"Error: slackLists.items.list failed for {list_id}: "
                 f"{resp.get('error', 'unknown_error')}"
             )
-        raw_items.extend(resp.get("items", []))
+        raw_items.extend(_required_list(resp, "items", "slackLists.items.list"))
         if not fetch_all and len(raw_items) >= limit:
             break
         cursor = resp.get("response_metadata", {}).get("next_cursor", "")
@@ -447,6 +509,7 @@ def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
     limit : int
         Max top-level messages to return (default 0 = all).
     """
+    _validate_limit(limit)
     # The F->C swap is a blind string edit, so a non-list id has to be rejected
     # here rather than derived from. A channel id (``C...``) would survive the
     # swap unchanged and this would happily return that channel's real messages
@@ -506,7 +569,9 @@ def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
             resp = _replies_page(ts, cursor)
             out.extend(
                 {"ts": r.get("ts"), "user": r.get("user", ""), "text": r.get("text", "")}
-                for r in resp.get("messages", [])
+                for r in _required_list(
+                    resp, "messages", f"conversations.replies for {comment_channel}"
+                )
                 if r.get("ts") != ts
             )
             cursor = resp.get("response_metadata", {}).get("next_cursor", "")
@@ -515,7 +580,7 @@ def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
 
     while True:
         resp = _history(**kwargs)
-        for m in resp.get("messages", []):
+        for m in _required_list(resp, "messages", f"conversations.history for {comment_channel}"):
             entry = {
                 "ts": m.get("ts"),
                 "user": m.get("user", ""),

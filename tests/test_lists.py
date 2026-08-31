@@ -53,6 +53,30 @@ class TestParseListId:
         url = "https://krafton.enterprise.slack.com/lists/T0GCQMN07/F0BG5933VUY/?tab=all"
         assert parse_list_id(url) == "F0BG5933VUY"
 
+    def test_raises_on_a_url_with_an_empty_last_segment(self):
+        """FIX [p3]: a trailing slash right after the team id (no list id segment
+        at all) used to survive ``rstrip("/")`` and come back out as the *team*
+        id ("T0GCQMN07") -- a wrong-but-plausible id that would sail past
+        ``list_items`` (which has no F-guard) and fail later with a confusing
+        ``list_not_found`` instead of "your URL was malformed"."""
+        url = "https://krafton.enterprise.slack.com/lists/T0GCQMN07/"
+
+        with pytest.raises(RuntimeError, match="could not find a Slack List id"):
+            parse_list_id(url)
+
+    def test_raises_on_a_bare_non_list_id(self):
+        """The guard applies to bare input too, not just URLs -- a team id or any
+        other non-F id passed directly is equally wrong-but-plausible."""
+        with pytest.raises(RuntimeError, match="could not find a Slack List id"):
+            parse_list_id("T0GCQMN07")
+
+    def test_raises_on_an_f_prefixed_id_with_a_punctuation_suffix(self):
+        """Round-2 FIX [p4]: the guard's `.isalnum()` clause (mirrored from
+        list_comments' own guard, which does have this case in
+        TestListCommentsRejectsNonListIds) was unexercised at this call site."""
+        with pytest.raises(RuntimeError, match="could not find a Slack List id"):
+            parse_list_id("F-123")
+
 
 class TestListItems:
     def test_walks_the_cursor_to_completion(self):
@@ -75,6 +99,48 @@ class TestListItems:
         assert [r["id"] for r in rows] == ["Rec1", "Rec2"]
         assert client.api_call.call_count == 2
         assert client.api_call.call_args_list[0].args[0] == "slackLists.items.list"
+
+    def test_walk_all_sends_an_explicit_page_size(self):
+        """FIX [p3]: every sibling loop in queries.py sends an explicit page size
+        on its walk-all path; this one used to send none at all on ``limit=0``."""
+        client = MagicMock()
+        client.api_call.return_value = {
+            "ok": True,
+            "items": [_item("Rec1")],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        list_items(client, "F0BG5933VUY")
+
+        params = client.api_call.call_args.kwargs["params"]
+        assert params["limit"] == 200
+
+    def test_limit_over_one_page_requests_the_remainder_not_the_original_limit(self):
+        """FIX [p3]: a limit of 350 used to ask for min(350, 200) == 200 on every
+        page, including the second one -- fetching a whole extra page (400 total)
+        before trimming down to 350. The second request must ask for the 150
+        still needed, not 200 again."""
+        client = MagicMock()
+        client.api_call.side_effect = _pages(
+            {
+                "ok": True,
+                "items": [_item(f"Rec{i}") for i in range(200)],
+                "response_metadata": {"next_cursor": "c2"},
+            },
+            {
+                "ok": True,
+                "items": [_item(f"Rec{i}") for i in range(200, 350)],
+                "response_metadata": {"next_cursor": ""},
+            },
+        )
+
+        rows = json.loads(list_items(client, "F0BG5933VUY", limit=350))
+
+        assert len(rows) == 350
+        first_params = client.api_call.call_args_list[0].kwargs["params"]
+        second_params = client.api_call.call_args_list[1].kwargs["params"]
+        assert first_params["limit"] == 200
+        assert second_params["limit"] == 150
 
     def test_limit_stops_at_n_without_walking_further_pages(self):
         client = MagicMock()
@@ -247,6 +313,56 @@ class TestListItems:
 
         with pytest.raises(RuntimeError, match="list_not_found"):
             list_items(client, "F0BG5933VUY")
+
+    def test_raises_when_ok_true_but_the_items_key_is_missing(self):
+        """FIX [p2]: ``resp.get("items", [])`` used to treat an ok:true response
+        with no "items" key at all the same as a genuinely empty list -- the
+        worst failure mode for this feature, since it looks like a complete,
+        empty result instead of a malformed response."""
+        client = MagicMock()
+        client.api_call.return_value = {"ok": True, "response_metadata": {"next_cursor": ""}}
+
+        with pytest.raises(RuntimeError, match="no 'items' key"):
+            list_items(client, "F0BG5933VUY")
+
+    def test_ok_true_with_a_genuinely_empty_items_list_still_returns_empty(self):
+        """The other half of the same fix: a present-but-empty "items" key must
+        keep working as a normal empty result, not be mistaken for the missing-key
+        error above."""
+        client = MagicMock()
+        client.api_call.return_value = {
+            "ok": True,
+            "items": [],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        assert json.loads(list_items(client, "F0BG5933VUY")) == []
+
+    def test_raises_when_ok_true_but_the_items_key_is_null(self):
+        """Round-2 FIX [p3]: ``null`` is a third response shape, distinct from a
+        missing key and from a genuinely empty ``[]`` -- before this fix it hit
+        `_required_list`'s ``return resp[key]`` and came back as ``None``, so the
+        caller's own iteration/``extend`` would raise a bare, unlabelled
+        ``TypeError`` instead of this helper's clear ``RuntimeError``."""
+        client = MagicMock()
+        client.api_call.return_value = {
+            "ok": True,
+            "items": None,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with pytest.raises(RuntimeError, match="'items' is null"):
+            list_items(client, "F0BG5933VUY")
+
+    def test_rejects_a_negative_limit_from_a_direct_library_caller(self):
+        """Round-2 FIX [p3]: click.IntRange only protects the CLI. A caller that
+        imports and calls list_items directly must get the same guarantee."""
+        client = MagicMock()
+
+        with pytest.raises(RuntimeError, match="limit must be >= 0"):
+            list_items(client, "F0BG5933VUY", limit=-1)
+
+        client.api_call.assert_not_called()
 
 
 class TestListComments:
@@ -430,9 +546,94 @@ class TestListComments:
         with pytest.raises(RuntimeError, match="not reachable"):
             list_comments(client, "F0BG5933VUY")
 
+    def test_raises_when_ok_true_but_the_messages_key_is_missing(self):
+        """FIX [p2]: mirrors TestListItems::test_raises_when_ok_true_but_the_items_key_is_missing
+        for the top-level history walk -- ``resp.get("messages", [])`` used to
+        treat an ok:true response with no "messages" key at all as zero comments,
+        indistinguishable from a list that genuinely has none."""
+        client = MagicMock()
+        client.conversations_history.return_value = {
+            "ok": True,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with pytest.raises(RuntimeError, match="no 'messages' key"):
+            list_comments(client, "F0BG5933VUY")
+
+    def test_ok_true_with_a_genuinely_empty_messages_list_still_returns_empty(self):
+        """The other half of the same fix: a present-but-empty "messages" key
+        must keep working as a normal empty result."""
+        client = MagicMock()
+        client.conversations_history.return_value = {
+            "ok": True,
+            "messages": [],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        result = json.loads(list_comments(client, "F0BG5933VUY"))
+
+        assert result["messages"] == []
+
+    def test_raises_when_ok_true_but_the_messages_key_is_null(self):
+        """Round-2 FIX [p3]: mirrors TestListItems' null-items test, for the
+        top-level history walk's "messages" key."""
+        client = MagicMock()
+        client.conversations_history.return_value = {
+            "ok": True,
+            "messages": None,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with pytest.raises(RuntimeError, match="'messages' is null"):
+            list_comments(client, "F0BG5933VUY")
+
+    def test_raises_when_ok_true_but_a_reply_pages_messages_key_is_missing(self):
+        """Round-2 FIX [p2] BLOCKING: the third collection-read site -- the
+        reply-page walk inside `_replies` -- was still a bare
+        ``resp.get("messages", [])`` after round 1. An ok:true reply page
+        missing "messages" entirely used to be silently read as "no more
+        replies" rather than raising, the exact failure mode `_required_list`
+        exists to eliminate; round 1 only wired it into the other two sites."""
+        client = MagicMock()
+        client.conversations_history.return_value = {
+            "ok": True,
+            "messages": [
+                {
+                    "ts": "1.0",
+                    "user": "USLACKBOT",
+                    "text": "A comment was added",
+                    "reply_count": 1,
+                }
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+        client.conversations_replies.return_value = {
+            "ok": True,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with pytest.raises(RuntimeError, match="no 'messages' key"):
+            list_comments(client, "F0BG5933VUY")
+
+    def test_rejects_a_negative_limit_from_a_direct_library_caller(self):
+        """Round-2 FIX [p3]: without this, a negative limit passed directly to
+        list_comments (bypassing the CLI's click.IntRange) used to reach
+        conversations.history and get relabeled as "comment channel not
+        reachable ... F→C mapping" -- blaming the wrong mechanism."""
+        client = MagicMock()
+
+        with pytest.raises(RuntimeError, match="limit must be >= 0"):
+            list_comments(client, "F0BG5933VUY", limit=-1)
+
+        client.conversations_history.assert_not_called()
+
 
 class TestListsCli:
-    def test_items_command_uses_the_user_token_and_lists_help_mentions_subcommands(self):
+    def test_lists_help_mentions_both_subcommands(self):
+        """FIX [p4]: renamed from a name that claimed to check user-token wiring
+        (that's covered separately by test_items_command_wires_the_user_client /
+        test_comments_command_wires_the_user_client below) -- this test only ever
+        asserted against `--help` text."""
         result = CliRunner().invoke(main, ["lists", "--help"])
 
         assert result.exit_code == 0, result.output
@@ -467,6 +668,38 @@ class TestListsCli:
 
         assert result.exit_code == 0, result.output
         assert list_items_mock.call_args.args[1] == "F0BG5933VUY"
+
+    def test_items_command_prints_a_clean_stderr_line_for_a_malformed_url(self):
+        """Round-2 FIX [p4]: parse_list_id's RuntimeError (client.py) is correct
+        by inspection -- it's raised inside the same `try` the CLI already wraps
+        in `except RuntimeError` -- but that path had no end-to-end test. This
+        confirms it actually produces the one-line stderr convention rather
+        than a traceback, and that the malformed id never reaches the client."""
+        user = MagicMock()
+        with patch("slack_tools.client.get_user_client", return_value=user):
+            result = CliRunner().invoke(
+                main, ["lists", "items", "https://x.slack.com/lists/T0GCQMN07/"]
+            )
+
+        assert result.exit_code == 1
+        assert "could not find a Slack List id" in result.stderr
+        assert result.stdout == ""
+        assert isinstance(result.exception, SystemExit)
+        user.api_call.assert_not_called()
+
+    def test_comments_command_prints_a_clean_stderr_line_for_a_malformed_url(self):
+        """Round-2 FIX [p4]: same end-to-end confirmation for `lists comments`."""
+        user = MagicMock()
+        with patch("slack_tools.client.get_user_client", return_value=user):
+            result = CliRunner().invoke(
+                main, ["lists", "comments", "https://x.slack.com/lists/T0GCQMN07/"]
+            )
+
+        assert result.exit_code == 1
+        assert "could not find a Slack List id" in result.stderr
+        assert result.stdout == ""
+        assert isinstance(result.exception, SystemExit)
+        user.conversations_history.assert_not_called()
 
     def test_items_command_fails_loudly_when_the_query_layer_raises(self):
         user = MagicMock()
@@ -549,6 +782,49 @@ class TestListsCli:
         assert result.exit_code == 0, result.output
         assert "--limit" in result.output
 
+    def test_comments_command_lets_an_unexpected_local_bug_raise_a_traceback(self):
+        """FIX [p2] decision: a programming bug is not an "expected failure" in
+        this repo's one-line-stderr sense, so the CLI boundary deliberately does
+        not widen its except clause to catch it -- see
+        queries.list_comments.test_a_local_bug_does_not_get_mislabeled_as_channel_not_reachable
+        for the query-layer half of this same pin. This test documents the actual
+        observed CLI-level behaviour for that choice: CliRunner reports the raw
+        exception and a non-zero exit code, with nothing echoed to stdout, rather
+        than a clean stderr line."""
+        user = MagicMock()
+        user.conversations_history.return_value = {
+            "ok": True,
+            "messages": [{"user": "USLACKBOT", "text": "A comment was added", "reply_count": 1}],
+            "response_metadata": {"next_cursor": ""},
+        }
+        with patch("slack_tools.client.get_user_client", return_value=user):
+            result = CliRunner().invoke(main, ["lists", "comments", "F0BG5933VUY"])
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, KeyError)
+        assert result.stdout == ""
+
+    def test_items_command_rejects_a_negative_limit(self):
+        """FIX [p3]: an unvalidated negative --limit used to be forwarded as-is.
+        For `lists items` this reached the Slack client and came back as a raw
+        API error; validating at the CLI boundary gives a clear, immediate
+        usage error instead."""
+        result = CliRunner().invoke(main, ["lists", "items", "F0BG5933VUY", "--limit=-1"])
+
+        assert result.exit_code != 0
+        assert "limit" in result.output.lower()
+
+    def test_comments_command_rejects_a_negative_limit(self):
+        """FIX [p3]: for `lists comments`, an unvalidated negative --limit used to
+        reach conversations.history, which raised an argument error there that
+        `_history`'s blanket except relabelled as "comment channel not reachable
+        ... F→C mapping" -- blaming the wrong mechanism for a bad CLI argument.
+        Validating here means that mislabeling can no longer happen via the CLI."""
+        result = CliRunner().invoke(main, ["lists", "comments", "F0BG5933VUY", "--limit=-1"])
+
+        assert result.exit_code != 0
+        assert "limit" in result.output.lower()
+
 
 class TestListCommentsRepliesPagination:
     """conversations.replies caps a page at 200. Stopping there dropped reply 201
@@ -617,7 +893,19 @@ class TestListCommentsRejectsNonListIds:
     messages labelled as list comments — wrong output presented as correct.
     """
 
-    @pytest.mark.parametrize("bad_id", ["C0ABCDEF", "D0ABCDEF", "", "F", "not-an-id"])
+    @pytest.mark.parametrize(
+        "bad_id",
+        [
+            "C0ABCDEF",
+            "D0ABCDEF",
+            "",
+            "F",
+            "not-an-id",
+            # FIX [p4]: an F-prefixed id whose remainder isn't alnum -- without this
+            # case, removing the guard's `.isalnum()` clause would break nothing.
+            "F-123",
+        ],
+    )
     def test_refuses_anything_that_is_not_a_list_id(self, bad_id):
         client = MagicMock()
         with pytest.raises(RuntimeError, match="not a Slack List id"):
