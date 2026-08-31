@@ -1,0 +1,1080 @@
+===== task-1-lists-read AC run: 2026-08-24T16:54:48+09:00 =====
+
+$ uv run --with pytest --with click --with python-dotenv --with slack-sdk pytest tests/ -q
+...................................................................      [100%]
+67 passed in 0.16s
+
+$ uv run --with ruff ruff check src/ tests/
+# NOTE: 4 pre-existing baseline errors (PIE790 main() pass, I001 import order in post/reply,
+# I001 datetime import order in queries.py) predate this task — verified via git stash before/after.
+# 0 new errors introduced by this task's changes.
+PIE790 [*] Unnecessary `pass` statement
+  --> src/slack_tools/cli.py:16:5
+   |
+14 | def main():
+15 |     """Slack CLI for AI agents and automation. All output is JSON."""
+16 |     pass
+   |     ^^^^
+help: Remove unnecessary `pass`
+   |
+15 |     """Slack CLI for AI agents and automation. All output is JSON."""
+   -     pass
+16 |
+   |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:106:5
+    |
+104 |       CHANNEL: channel ID or #channel-name.
+105 |       """
+106 | /     from slack_tools.client import get_bot_client
+107 | |     from slack_tools.actions import post_message
+    | |________________________________________________^
+108 |
+109 |       click.echo(post_message(get_bot_client(), channel, text))
+    |
+help: Organize imports
+    |
+105 |     """
+106 +     from slack_tools.actions import post_message
+107 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import post_message
+108 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:122:5
+    |
+120 |       THREAD_TS: timestamp of the parent message.
+121 |       """
+122 | /     from slack_tools.client import get_bot_client
+123 | |     from slack_tools.actions import reply_message
+    | |_________________________________________________^
+124 |
+125 |       click.echo(reply_message(get_bot_client(), channel, thread_ts, text))
+    |
+help: Organize imports
+    |
+121 |     """
+122 +     from slack_tools.actions import reply_message
+123 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import reply_message
+124 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> src/slack_tools/queries.py:3:1
+   |
+ 1 |   """Read-only Slack operations. All functions return JSON strings."""
+ 2 |
+ 3 | / from __future__ import annotations
+ 4 | |
+ 5 | | import json
+ 6 | | from datetime import datetime, timezone, timedelta
+ 7 | |
+ 8 | | from slack_sdk import WebClient
+ 9 | |
+10 | | from slack_tools.client import resolve_channel
+   | |______________________________________________^
+11 |
+12 |   # Slack's search API rejects a page larger than 100.
+   |
+help: Organize imports
+  |
+5 | import json
+  - from datetime import datetime, timezone, timedelta
+6 + from datetime import datetime, timedelta, timezone
+7 |
+  |
+
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.
+(exit code: 1)
+
+
+$ uv run --with ruff ruff format --check src/ tests/ || true
+# NOTE: pre-existing baseline formatting diffs in actions.py, queries.py (older functions),
+# test_search.py predate this task. The new/changed file tests/test_lists.py passes format check.
+unformatted: File would be reformatted
+  --> src/slack_tools/actions.py:24:23
+   |
+23 |     resp = client.chat_postMessage(channel=channel_id, text=text)
+   -     return json.dumps({
+   -         "ok": resp["ok"],
+   -         "channel": resp["channel"],
+   -         "ts": resp["ts"],
+   -     }, indent=2, ensure_ascii=False)
+24 +     return json.dumps(
+25 +         {
+26 +             "ok": resp["ok"],
+27 +             "channel": resp["channel"],
+28 +             "ts": resp["ts"],
+29 +         },
+30 +         indent=2,
+31 +         ensure_ascii=False,
+32 +     )
+33 |
+--------------------------------------------------------------------------------
+48 |     resp = client.chat_postMessage(channel=channel_id, text=text, thread_ts=thread_ts)
+   -     return json.dumps({
+   -         "ok": resp["ok"],
+   -         "channel": resp["channel"],
+   -         "ts": resp["ts"],
+   -         "thread_ts": resp.get("message", {}).get("thread_ts", thread_ts),
+   -     }, indent=2, ensure_ascii=False)
+49 +     return json.dumps(
+50 +         {
+51 +             "ok": resp["ok"],
+52 +             "channel": resp["channel"],
+53 +             "ts": resp["ts"],
+54 +             "thread_ts": resp.get("message", {}).get("thread_ts", thread_ts),
+55 +         },
+56 +         indent=2,
+57 +         ensure_ascii=False,
+58 +     )
+   |
+
+unformatted: File would be reformatted
+   --> src/slack_tools/queries.py:56:24
+    |
+55  |     for m in matches if fetch_all else matches[:count]:
+    -         results.append({
+    -             "ts": m.get("ts"),
+    -             "channel": m.get("channel", {}).get("name", ""),
+    -             "channel_id": m.get("channel", {}).get("id", ""),
+    -             # ``user`` is the stable Slack user id, ``username`` the display handle.
+    -             # Both are surfaced because they serve different jobs: filtering by author
+    -             # needs the id (handles are renameable and bots are absent from
+    -             # ``users.list``, so an id list is the only reliable allow/deny key),
+    -             # while humans reading the output need the handle.  Bot posts carry a
+    -             # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+    -             # and app/integration posts carry no id at all, only a username.
+    -             "user": m.get("user", ""),
+    -             "username": m.get("username", ""),
+    -             "text": m.get("text", ""),
+    -             "permalink": m.get("permalink", ""),
+    -         })
+56  +         results.append(
+57  +             {
+58  +                 "ts": m.get("ts"),
+59  +                 "channel": m.get("channel", {}).get("name", ""),
+60  +                 "channel_id": m.get("channel", {}).get("id", ""),
+61  +                 # ``user`` is the stable Slack user id, ``username`` the display handle.
+62  +                 # Both are surfaced because they serve different jobs: filtering by author
+63  +                 # needs the id (handles are renameable and bots are absent from
+64  +                 # ``users.list``, so an id list is the only reliable allow/deny key),
+65  +                 # while humans reading the output need the handle.  Bot posts carry a
+66  +                 # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+67  +                 # and app/integration posts carry no id at all, only a username.
+68  +                 "user": m.get("user", ""),
+69  +                 "username": m.get("username", ""),
+70  +                 "text": m.get("text", ""),
+71  +                 "permalink": m.get("permalink", ""),
+72  +             }
+73  +         )
+74  |     return json.dumps(results, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+115 |         for m in resp.get("messages", []):
+    -             messages.append({
+    -                 "ts": m.get("ts"),
+    -                 "user": m.get("user", ""),
+    -                 "text": m.get("text", ""),
+    -                 "thread_ts": m.get("thread_ts"),
+    -                 "reply_count": m.get("reply_count", 0),
+    -                 "latest_reply": m.get("latest_reply"),
+    -             })
+116 +             messages.append(
+117 +                 {
+118 +                     "ts": m.get("ts"),
+119 +                     "user": m.get("user", ""),
+120 +                     "text": m.get("text", ""),
+121 +                     "thread_ts": m.get("thread_ts"),
+122 +                     "reply_count": m.get("reply_count", 0),
+123 +                     "latest_reply": m.get("latest_reply"),
+124 +                 }
+125 +             )
+126 |         if not fetch_all or not resp.get("has_more"):
+--------------------------------------------------------------------------------
+151 |     for m in resp.get("messages", []):
+    -         messages.append({
+    -             "ts": m.get("ts"),
+    -             "user": m.get("user", ""),
+    -             "text": m.get("text", ""),
+    -         })
+152 +         messages.append(
+153 +             {
+154 +                 "ts": m.get("ts"),
+155 +                 "user": m.get("user", ""),
+156 +                 "text": m.get("text", ""),
+157 +             }
+158 +         )
+159 |     return json.dumps(messages, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+187 |                 q = query.lower()
+    -                 if not any(q in v.lower() for v in [entry["name"], entry["real_name"], entry["display_name"], entry["email"]] if v):
+188 +                 if not any(
+189 +                     q in v.lower()
+190 +                     for v in [
+191 +                         entry["name"],
+192 +                         entry["real_name"],
+193 +                         entry["display_name"],
+194 +                         entry["email"],
+195 +                     ]
+196 +                     if v
+197 +                 ):
+198 |                     continue
+--------------------------------------------------------------------------------
+218 |             profile = u.get("profile", {})
+    -             names[u["id"]] = (
+    -                 profile.get("display_name") or u.get("real_name") or u.get("name", "")
+    -             )
+219 +             names[u["id"]] = profile.get("display_name") or u.get("real_name") or u.get("name", "")
+220 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+250 |             latest = ch.get("latest")
+    -             dms.append({
+    -                 "id": ch["id"],
+    -                 "user": uid,
+    -                 "username": (names or {}).get(uid, ""),
+    -                 "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+    -             })
+251 +             dms.append(
+252 +                 {
+253 +                     "id": ch["id"],
+254 +                     "user": uid,
+255 +                     "username": (names or {}).get(uid, ""),
+256 +                     "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+257 +                 }
+258 +             )
+259 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+264 |
+    - def list_channels(client: WebClient, query: str | None = None, include_private: bool = False) -> str:
+265 + def list_channels(
+266 +     client: WebClient, query: str | None = None, include_private: bool = False
+267 + ) -> str:
+268 |     """List workspace channels.
+    |
+
+unformatted: File would be reformatted
+   --> tests/test_search.py:126:30
+    |
+125 |
+    -     @pytest.mark.parametrize("field", ["ts", "channel", "channel_id", "user", "username", "text",
+    -                                        "permalink"])
+126 +     @pytest.mark.parametrize(
+127 +         "field", ["ts", "channel", "channel_id", "user", "username", "text", "permalink"]
+128 +     )
+129 |     def test_output_keys_are_stable(self, field):
+    |
+
+3 files would be reformatted, 7 files already formatted
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # cli wiring check
+cli wiring ok
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # parse_list_id check
+parse_list_id ok
+
+$ grep -q 'lists:read' CLAUDE.md && echo "grep: lists:read found in CLAUDE.md"
+grep: lists:read found in CLAUDE.md
+
+===== end of AC run =====
+
+===== task-1-lists-read Round 2 (reviewer fixes) AC run: 2026-08-24T17:11:12+09:00 =====
+
+$ uv run --with pytest --with click --with python-dotenv --with slack-sdk pytest tests/ -q
+........................................................................ [ 93%]
+.....                                                                    [100%]
+77 passed in 0.16s
+
+$ uv run --with ruff ruff check src/ tests/
+# NOTE: same 4 pre-existing baseline errors as Round 1 (unchanged); 0 new errors from Round 2 fixes.
+PIE790 [*] Unnecessary `pass` statement
+  --> src/slack_tools/cli.py:16:5
+   |
+14 | def main():
+15 |     """Slack CLI for AI agents and automation. All output is JSON."""
+16 |     pass
+   |     ^^^^
+help: Remove unnecessary `pass`
+   |
+15 |     """Slack CLI for AI agents and automation. All output is JSON."""
+   -     pass
+16 |
+   |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:106:5
+    |
+104 |       CHANNEL: channel ID or #channel-name.
+105 |       """
+106 | /     from slack_tools.client import get_bot_client
+107 | |     from slack_tools.actions import post_message
+    | |________________________________________________^
+108 |
+109 |       click.echo(post_message(get_bot_client(), channel, text))
+    |
+help: Organize imports
+    |
+105 |     """
+106 +     from slack_tools.actions import post_message
+107 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import post_message
+108 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:122:5
+    |
+120 |       THREAD_TS: timestamp of the parent message.
+121 |       """
+122 | /     from slack_tools.client import get_bot_client
+123 | |     from slack_tools.actions import reply_message
+    | |_________________________________________________^
+124 |
+125 |       click.echo(reply_message(get_bot_client(), channel, thread_ts, text))
+    |
+help: Organize imports
+    |
+121 |     """
+122 +     from slack_tools.actions import reply_message
+123 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import reply_message
+124 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> src/slack_tools/queries.py:3:1
+   |
+ 1 |   """Read-only Slack operations. All functions return JSON strings."""
+ 2 |
+ 3 | / from __future__ import annotations
+ 4 | |
+ 5 | | import json
+ 6 | | from datetime import datetime, timezone, timedelta
+ 7 | |
+ 8 | | from slack_sdk import WebClient
+ 9 | |
+10 | | from slack_tools.client import resolve_channel
+   | |______________________________________________^
+11 |
+12 |   # Slack's search API rejects a page larger than 100.
+   |
+help: Organize imports
+  |
+5 | import json
+  - from datetime import datetime, timezone, timedelta
+6 + from datetime import datetime, timedelta, timezone
+7 |
+  |
+
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.
+(exit code: 1)
+
+$ uv run --with ruff ruff format --check src/ tests/ || true
+# NOTE: same 3 pre-existing baseline files as Round 1 (unchanged); tests/test_lists.py reformatted
+# after Round 2 additions and is clean again.
+unformatted: File would be reformatted
+  --> src/slack_tools/actions.py:24:23
+   |
+23 |     resp = client.chat_postMessage(channel=channel_id, text=text)
+   -     return json.dumps({
+   -         "ok": resp["ok"],
+   -         "channel": resp["channel"],
+   -         "ts": resp["ts"],
+   -     }, indent=2, ensure_ascii=False)
+24 +     return json.dumps(
+25 +         {
+26 +             "ok": resp["ok"],
+27 +             "channel": resp["channel"],
+28 +             "ts": resp["ts"],
+29 +         },
+30 +         indent=2,
+31 +         ensure_ascii=False,
+32 +     )
+33 |
+--------------------------------------------------------------------------------
+48 |     resp = client.chat_postMessage(channel=channel_id, text=text, thread_ts=thread_ts)
+   -     return json.dumps({
+   -         "ok": resp["ok"],
+   -         "channel": resp["channel"],
+   -         "ts": resp["ts"],
+   -         "thread_ts": resp.get("message", {}).get("thread_ts", thread_ts),
+   -     }, indent=2, ensure_ascii=False)
+49 +     return json.dumps(
+50 +         {
+51 +             "ok": resp["ok"],
+52 +             "channel": resp["channel"],
+53 +             "ts": resp["ts"],
+54 +             "thread_ts": resp.get("message", {}).get("thread_ts", thread_ts),
+55 +         },
+56 +         indent=2,
+57 +         ensure_ascii=False,
+58 +     )
+   |
+
+unformatted: File would be reformatted
+   --> src/slack_tools/queries.py:56:24
+    |
+55  |     for m in matches if fetch_all else matches[:count]:
+    -         results.append({
+    -             "ts": m.get("ts"),
+    -             "channel": m.get("channel", {}).get("name", ""),
+    -             "channel_id": m.get("channel", {}).get("id", ""),
+    -             # ``user`` is the stable Slack user id, ``username`` the display handle.
+    -             # Both are surfaced because they serve different jobs: filtering by author
+    -             # needs the id (handles are renameable and bots are absent from
+    -             # ``users.list``, so an id list is the only reliable allow/deny key),
+    -             # while humans reading the output need the handle.  Bot posts carry a
+    -             # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+    -             # and app/integration posts carry no id at all, only a username.
+    -             "user": m.get("user", ""),
+    -             "username": m.get("username", ""),
+    -             "text": m.get("text", ""),
+    -             "permalink": m.get("permalink", ""),
+    -         })
+56  +         results.append(
+57  +             {
+58  +                 "ts": m.get("ts"),
+59  +                 "channel": m.get("channel", {}).get("name", ""),
+60  +                 "channel_id": m.get("channel", {}).get("id", ""),
+61  +                 # ``user`` is the stable Slack user id, ``username`` the display handle.
+62  +                 # Both are surfaced because they serve different jobs: filtering by author
+63  +                 # needs the id (handles are renameable and bots are absent from
+64  +                 # ``users.list``, so an id list is the only reliable allow/deny key),
+65  +                 # while humans reading the output need the handle.  Bot posts carry a
+66  +                 # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+67  +                 # and app/integration posts carry no id at all, only a username.
+68  +                 "user": m.get("user", ""),
+69  +                 "username": m.get("username", ""),
+70  +                 "text": m.get("text", ""),
+71  +                 "permalink": m.get("permalink", ""),
+72  +             }
+73  +         )
+74  |     return json.dumps(results, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+115 |         for m in resp.get("messages", []):
+    -             messages.append({
+    -                 "ts": m.get("ts"),
+    -                 "user": m.get("user", ""),
+    -                 "text": m.get("text", ""),
+    -                 "thread_ts": m.get("thread_ts"),
+    -                 "reply_count": m.get("reply_count", 0),
+    -                 "latest_reply": m.get("latest_reply"),
+    -             })
+116 +             messages.append(
+117 +                 {
+118 +                     "ts": m.get("ts"),
+119 +                     "user": m.get("user", ""),
+120 +                     "text": m.get("text", ""),
+121 +                     "thread_ts": m.get("thread_ts"),
+122 +                     "reply_count": m.get("reply_count", 0),
+123 +                     "latest_reply": m.get("latest_reply"),
+124 +                 }
+125 +             )
+126 |         if not fetch_all or not resp.get("has_more"):
+--------------------------------------------------------------------------------
+151 |     for m in resp.get("messages", []):
+    -         messages.append({
+    -             "ts": m.get("ts"),
+    -             "user": m.get("user", ""),
+    -             "text": m.get("text", ""),
+    -         })
+152 +         messages.append(
+153 +             {
+154 +                 "ts": m.get("ts"),
+155 +                 "user": m.get("user", ""),
+156 +                 "text": m.get("text", ""),
+157 +             }
+158 +         )
+159 |     return json.dumps(messages, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+187 |                 q = query.lower()
+    -                 if not any(q in v.lower() for v in [entry["name"], entry["real_name"], entry["display_name"], entry["email"]] if v):
+188 +                 if not any(
+189 +                     q in v.lower()
+190 +                     for v in [
+191 +                         entry["name"],
+192 +                         entry["real_name"],
+193 +                         entry["display_name"],
+194 +                         entry["email"],
+195 +                     ]
+196 +                     if v
+197 +                 ):
+198 |                     continue
+--------------------------------------------------------------------------------
+218 |             profile = u.get("profile", {})
+    -             names[u["id"]] = (
+    -                 profile.get("display_name") or u.get("real_name") or u.get("name", "")
+    -             )
+219 +             names[u["id"]] = profile.get("display_name") or u.get("real_name") or u.get("name", "")
+220 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+250 |             latest = ch.get("latest")
+    -             dms.append({
+    -                 "id": ch["id"],
+    -                 "user": uid,
+    -                 "username": (names or {}).get(uid, ""),
+    -                 "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+    -             })
+251 +             dms.append(
+252 +                 {
+253 +                     "id": ch["id"],
+254 +                     "user": uid,
+255 +                     "username": (names or {}).get(uid, ""),
+256 +                     "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+257 +                 }
+258 +             )
+259 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+264 |
+    - def list_channels(client: WebClient, query: str | None = None, include_private: bool = False) -> str:
+265 + def list_channels(
+266 +     client: WebClient, query: str | None = None, include_private: bool = False
+267 + ) -> str:
+268 |     """List workspace channels.
+    |
+
+unformatted: File would be reformatted
+   --> tests/test_search.py:126:30
+    |
+125 |
+    -     @pytest.mark.parametrize("field", ["ts", "channel", "channel_id", "user", "username", "text",
+    -                                        "permalink"])
+126 +     @pytest.mark.parametrize(
+127 +         "field", ["ts", "channel", "channel_id", "user", "username", "text", "permalink"]
+128 +     )
+129 |     def test_output_keys_are_stable(self, field):
+    |
+
+3 files would be reformatted, 7 files already formatted
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # parse_list_id incl. FIX 1 regression cases (query string / fragment / trailing slash / trailing slash+query)
+parse_list_id ok (round 2 regressions fixed)
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # cli wiring check (unchanged)
+cli wiring ok
+
+$ grep -q 'lists:read' CLAUDE.md && echo "grep: lists:read found in CLAUDE.md"
+grep: lists:read found in CLAUDE.md
+
+===== end of Round 2 AC run =====
+
+===== task-1-lists-read Round 3 (FIX 5: CLI error presentation) AC run: 2026-08-24T17:15:29+09:00 =====
+
+$ uv run --with pytest --with click --with python-dotenv --with slack-sdk pytest tests/ -q
+........................................................................ [ 91%]
+.......                                                                  [100%]
+79 passed in 0.14s
+
+$ uv run --with ruff ruff check src/ tests/
+# NOTE: same 4 pre-existing baseline errors as Round 1/2 (unchanged); 0 new errors from FIX 5.
+PIE790 [*] Unnecessary `pass` statement
+  --> src/slack_tools/cli.py:17:5
+   |
+15 | def main():
+16 |     """Slack CLI for AI agents and automation. All output is JSON."""
+17 |     pass
+   |     ^^^^
+help: Remove unnecessary `pass`
+   |
+16 |     """Slack CLI for AI agents and automation. All output is JSON."""
+   -     pass
+17 |
+   |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:107:5
+    |
+105 |       CHANNEL: channel ID or #channel-name.
+106 |       """
+107 | /     from slack_tools.client import get_bot_client
+108 | |     from slack_tools.actions import post_message
+    | |________________________________________________^
+109 |
+110 |       click.echo(post_message(get_bot_client(), channel, text))
+    |
+help: Organize imports
+    |
+106 |     """
+107 +     from slack_tools.actions import post_message
+108 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import post_message
+109 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:123:5
+    |
+121 |       THREAD_TS: timestamp of the parent message.
+122 |       """
+123 | /     from slack_tools.client import get_bot_client
+124 | |     from slack_tools.actions import reply_message
+    | |_________________________________________________^
+125 |
+126 |       click.echo(reply_message(get_bot_client(), channel, thread_ts, text))
+    |
+help: Organize imports
+    |
+122 |     """
+123 +     from slack_tools.actions import reply_message
+124 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import reply_message
+125 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> src/slack_tools/queries.py:3:1
+   |
+ 1 |   """Read-only Slack operations. All functions return JSON strings."""
+ 2 |
+ 3 | / from __future__ import annotations
+ 4 | |
+ 5 | | import json
+ 6 | | from datetime import datetime, timezone, timedelta
+ 7 | |
+ 8 | | from slack_sdk import WebClient
+ 9 | |
+10 | | from slack_tools.client import resolve_channel
+   | |______________________________________________^
+11 |
+12 |   # Slack's search API rejects a page larger than 100.
+   |
+help: Organize imports
+  |
+5 | import json
+  - from datetime import datetime, timezone, timedelta
+6 + from datetime import datetime, timedelta, timezone
+7 |
+  |
+
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.
+(exit code: 1)
+
+$ uv run --with ruff ruff format --check src/ tests/ || true
+# NOTE: same 3 pre-existing baseline files as Round 1/2 (unchanged). cli.py and test_lists.py
+# individually confirmed clean: `ruff format --check src/slack_tools/cli.py tests/test_lists.py` -> "2 files already formatted"
+unformatted: File would be reformatted
+  --> src/slack_tools/actions.py:24:23
+   |
+23 |     resp = client.chat_postMessage(channel=channel_id, text=text)
+   -     return json.dumps({
+   -         "ok": resp["ok"],
+   -         "channel": resp["channel"],
+   -         "ts": resp["ts"],
+   -     }, indent=2, ensure_ascii=False)
+24 +     return json.dumps(
+25 +         {
+26 +             "ok": resp["ok"],
+27 +             "channel": resp["channel"],
+28 +             "ts": resp["ts"],
+29 +         },
+30 +         indent=2,
+31 +         ensure_ascii=False,
+32 +     )
+33 |
+--------------------------------------------------------------------------------
+48 |     resp = client.chat_postMessage(channel=channel_id, text=text, thread_ts=thread_ts)
+   -     return json.dumps({
+   -         "ok": resp["ok"],
+   -         "channel": resp["channel"],
+   -         "ts": resp["ts"],
+   -         "thread_ts": resp.get("message", {}).get("thread_ts", thread_ts),
+   -     }, indent=2, ensure_ascii=False)
+49 +     return json.dumps(
+50 +         {
+51 +             "ok": resp["ok"],
+52 +             "channel": resp["channel"],
+53 +             "ts": resp["ts"],
+54 +             "thread_ts": resp.get("message", {}).get("thread_ts", thread_ts),
+55 +         },
+56 +         indent=2,
+57 +         ensure_ascii=False,
+58 +     )
+   |
+
+unformatted: File would be reformatted
+   --> src/slack_tools/queries.py:56:24
+    |
+55  |     for m in matches if fetch_all else matches[:count]:
+    -         results.append({
+    -             "ts": m.get("ts"),
+    -             "channel": m.get("channel", {}).get("name", ""),
+    -             "channel_id": m.get("channel", {}).get("id", ""),
+    -             # ``user`` is the stable Slack user id, ``username`` the display handle.
+    -             # Both are surfaced because they serve different jobs: filtering by author
+    -             # needs the id (handles are renameable and bots are absent from
+    -             # ``users.list``, so an id list is the only reliable allow/deny key),
+    -             # while humans reading the output need the handle.  Bot posts carry a
+    -             # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+    -             # and app/integration posts carry no id at all, only a username.
+    -             "user": m.get("user", ""),
+    -             "username": m.get("username", ""),
+    -             "text": m.get("text", ""),
+    -             "permalink": m.get("permalink", ""),
+    -         })
+56  +         results.append(
+57  +             {
+58  +                 "ts": m.get("ts"),
+59  +                 "channel": m.get("channel", {}).get("name", ""),
+60  +                 "channel_id": m.get("channel", {}).get("id", ""),
+61  +                 # ``user`` is the stable Slack user id, ``username`` the display handle.
+62  +                 # Both are surfaced because they serve different jobs: filtering by author
+63  +                 # needs the id (handles are renameable and bots are absent from
+64  +                 # ``users.list``, so an id list is the only reliable allow/deny key),
+65  +                 # while humans reading the output need the handle.  Bot posts carry a
+66  +                 # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+67  +                 # and app/integration posts carry no id at all, only a username.
+68  +                 "user": m.get("user", ""),
+69  +                 "username": m.get("username", ""),
+70  +                 "text": m.get("text", ""),
+71  +                 "permalink": m.get("permalink", ""),
+72  +             }
+73  +         )
+74  |     return json.dumps(results, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+115 |         for m in resp.get("messages", []):
+    -             messages.append({
+    -                 "ts": m.get("ts"),
+    -                 "user": m.get("user", ""),
+    -                 "text": m.get("text", ""),
+    -                 "thread_ts": m.get("thread_ts"),
+    -                 "reply_count": m.get("reply_count", 0),
+    -                 "latest_reply": m.get("latest_reply"),
+    -             })
+116 +             messages.append(
+117 +                 {
+118 +                     "ts": m.get("ts"),
+119 +                     "user": m.get("user", ""),
+120 +                     "text": m.get("text", ""),
+121 +                     "thread_ts": m.get("thread_ts"),
+122 +                     "reply_count": m.get("reply_count", 0),
+123 +                     "latest_reply": m.get("latest_reply"),
+124 +                 }
+125 +             )
+126 |         if not fetch_all or not resp.get("has_more"):
+--------------------------------------------------------------------------------
+151 |     for m in resp.get("messages", []):
+    -         messages.append({
+    -             "ts": m.get("ts"),
+    -             "user": m.get("user", ""),
+    -             "text": m.get("text", ""),
+    -         })
+152 +         messages.append(
+153 +             {
+154 +                 "ts": m.get("ts"),
+155 +                 "user": m.get("user", ""),
+156 +                 "text": m.get("text", ""),
+157 +             }
+158 +         )
+159 |     return json.dumps(messages, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+187 |                 q = query.lower()
+    -                 if not any(q in v.lower() for v in [entry["name"], entry["real_name"], entry["display_name"], entry["email"]] if v):
+188 +                 if not any(
+189 +                     q in v.lower()
+190 +                     for v in [
+191 +                         entry["name"],
+192 +                         entry["real_name"],
+193 +                         entry["display_name"],
+194 +                         entry["email"],
+195 +                     ]
+196 +                     if v
+197 +                 ):
+198 |                     continue
+--------------------------------------------------------------------------------
+218 |             profile = u.get("profile", {})
+    -             names[u["id"]] = (
+    -                 profile.get("display_name") or u.get("real_name") or u.get("name", "")
+    -             )
+219 +             names[u["id"]] = profile.get("display_name") or u.get("real_name") or u.get("name", "")
+220 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+250 |             latest = ch.get("latest")
+    -             dms.append({
+    -                 "id": ch["id"],
+    -                 "user": uid,
+    -                 "username": (names or {}).get(uid, ""),
+    -                 "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+    -             })
+251 +             dms.append(
+252 +                 {
+253 +                     "id": ch["id"],
+254 +                     "user": uid,
+255 +                     "username": (names or {}).get(uid, ""),
+256 +                     "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+257 +                 }
+258 +             )
+259 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+264 |
+    - def list_channels(client: WebClient, query: str | None = None, include_private: bool = False) -> str:
+265 + def list_channels(
+266 +     client: WebClient, query: str | None = None, include_private: bool = False
+267 + ) -> str:
+268 |     """List workspace channels.
+    |
+
+unformatted: File would be reformatted
+   --> tests/test_search.py:126:30
+    |
+125 |
+    -     @pytest.mark.parametrize("field", ["ts", "channel", "channel_id", "user", "username", "text",
+    -                                        "permalink"])
+126 +     @pytest.mark.parametrize(
+127 +         "field", ["ts", "channel", "channel_id", "user", "username", "text", "permalink"]
+128 +     )
+129 |     def test_output_keys_are_stable(self, field):
+    |
+
+3 files would be reformatted, 7 files already formatted
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # cli wiring check (unchanged)
+cli wiring ok
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # FIX 5 manual mock-only verification: stderr line, no traceback, SystemExit
+items: clean stderr line, no traceback, SystemExit(1) ok
+comments: clean stderr line (F->C wording preserved verbatim), no traceback, SystemExit(1) ok
+
+$ grep -q 'lists:read' CLAUDE.md && echo "grep: lists:read found in CLAUDE.md"
+grep: lists:read found in CLAUDE.md
+
+===== end of Round 3 AC run =====
+
+===== task-1-lists-read Round 4 (FIX 6/7/8/9) AC run: 2026-08-24T18:30:59+09:00 =====
+
+$ uv run --with pytest --with click --with python-dotenv --with slack-sdk pytest tests/ -q
+........................................................................ [ 87%]
+..........                                                               [100%]
+82 passed in 0.15s
+
+$ uv run --with ruff ruff check src/ tests/
+# NOTE: same 4 pre-existing baseline errors as Rounds 1-3 (unchanged); 0 new errors from FIX 6/7/9.
+PIE790 [*] Unnecessary `pass` statement
+  --> src/slack_tools/cli.py:17:5
+   |
+15 | def main():
+16 |     """Slack CLI for AI agents and automation. All output is JSON."""
+17 |     pass
+   |     ^^^^
+help: Remove unnecessary `pass`
+   |
+16 |     """Slack CLI for AI agents and automation. All output is JSON."""
+   -     pass
+17 |
+   |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:107:5
+    |
+105 |       CHANNEL: channel ID or #channel-name.
+106 |       """
+107 | /     from slack_tools.client import get_bot_client
+108 | |     from slack_tools.actions import post_message
+    | |________________________________________________^
+109 |
+110 |       click.echo(post_message(get_bot_client(), channel, text))
+    |
+help: Organize imports
+    |
+106 |     """
+107 +     from slack_tools.actions import post_message
+108 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import post_message
+109 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+   --> src/slack_tools/cli.py:123:5
+    |
+121 |       THREAD_TS: timestamp of the parent message.
+122 |       """
+123 | /     from slack_tools.client import get_bot_client
+124 | |     from slack_tools.actions import reply_message
+    | |_________________________________________________^
+125 |
+126 |       click.echo(reply_message(get_bot_client(), channel, thread_ts, text))
+    |
+help: Organize imports
+    |
+122 |     """
+123 +     from slack_tools.actions import reply_message
+124 |     from slack_tools.client import get_bot_client
+    -     from slack_tools.actions import reply_message
+125 |
+    |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> src/slack_tools/queries.py:3:1
+   |
+ 1 |   """Read-only Slack operations. All functions return JSON strings."""
+ 2 |
+ 3 | / from __future__ import annotations
+ 4 | |
+ 5 | | import json
+ 6 | | from datetime import datetime, timezone, timedelta
+ 7 | |
+ 8 | | from slack_sdk import WebClient
+ 9 | |
+10 | | from slack_tools.client import resolve_channel
+   | |______________________________________________^
+11 |
+12 |   # Slack's search API rejects a page larger than 100.
+   |
+help: Organize imports
+  |
+5 | import json
+  - from datetime import datetime, timezone, timedelta
+6 + from datetime import datetime, timedelta, timezone
+7 |
+  |
+
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.
+(exit code: 1)
+
+$ uv run --with ruff ruff format --check src/slack_tools/cli.py src/slack_tools/client.py src/slack_tools/queries.py tests/test_lists.py
+# NOTE: queries.py still shows the same pre-existing baseline diffs in unrelated functions
+# (list_channels, list_dms, search_messages, channel_history, list_users - all untouched by this task).
+# cli.py, client.py, test_lists.py report "already formatted".
+unformatted: File would be reformatted
+   --> src/slack_tools/queries.py:56:24
+    |
+55  |     for m in matches if fetch_all else matches[:count]:
+    -         results.append({
+    -             "ts": m.get("ts"),
+    -             "channel": m.get("channel", {}).get("name", ""),
+    -             "channel_id": m.get("channel", {}).get("id", ""),
+    -             # ``user`` is the stable Slack user id, ``username`` the display handle.
+    -             # Both are surfaced because they serve different jobs: filtering by author
+    -             # needs the id (handles are renameable and bots are absent from
+    -             # ``users.list``, so an id list is the only reliable allow/deny key),
+    -             # while humans reading the output need the handle.  Bot posts carry a
+    -             # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+    -             # and app/integration posts carry no id at all, only a username.
+    -             "user": m.get("user", ""),
+    -             "username": m.get("username", ""),
+    -             "text": m.get("text", ""),
+    -             "permalink": m.get("permalink", ""),
+    -         })
+56  +         results.append(
+57  +             {
+58  +                 "ts": m.get("ts"),
+59  +                 "channel": m.get("channel", {}).get("name", ""),
+60  +                 "channel_id": m.get("channel", {}).get("id", ""),
+61  +                 # ``user`` is the stable Slack user id, ``username`` the display handle.
+62  +                 # Both are surfaced because they serve different jobs: filtering by author
+63  +                 # needs the id (handles are renameable and bots are absent from
+64  +                 # ``users.list``, so an id list is the only reliable allow/deny key),
+65  +                 # while humans reading the output need the handle.  Bot posts carry a
+66  +                 # normal ``U…`` id here — ``search.messages`` does not set ``bot_id`` —
+67  +                 # and app/integration posts carry no id at all, only a username.
+68  +                 "user": m.get("user", ""),
+69  +                 "username": m.get("username", ""),
+70  +                 "text": m.get("text", ""),
+71  +                 "permalink": m.get("permalink", ""),
+72  +             }
+73  +         )
+74  |     return json.dumps(results, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+115 |         for m in resp.get("messages", []):
+    -             messages.append({
+    -                 "ts": m.get("ts"),
+    -                 "user": m.get("user", ""),
+    -                 "text": m.get("text", ""),
+    -                 "thread_ts": m.get("thread_ts"),
+    -                 "reply_count": m.get("reply_count", 0),
+    -                 "latest_reply": m.get("latest_reply"),
+    -             })
+116 +             messages.append(
+117 +                 {
+118 +                     "ts": m.get("ts"),
+119 +                     "user": m.get("user", ""),
+120 +                     "text": m.get("text", ""),
+121 +                     "thread_ts": m.get("thread_ts"),
+122 +                     "reply_count": m.get("reply_count", 0),
+123 +                     "latest_reply": m.get("latest_reply"),
+124 +                 }
+125 +             )
+126 |         if not fetch_all or not resp.get("has_more"):
+--------------------------------------------------------------------------------
+151 |     for m in resp.get("messages", []):
+    -         messages.append({
+    -             "ts": m.get("ts"),
+    -             "user": m.get("user", ""),
+    -             "text": m.get("text", ""),
+    -         })
+152 +         messages.append(
+153 +             {
+154 +                 "ts": m.get("ts"),
+155 +                 "user": m.get("user", ""),
+156 +                 "text": m.get("text", ""),
+157 +             }
+158 +         )
+159 |     return json.dumps(messages, indent=2, ensure_ascii=False)
+--------------------------------------------------------------------------------
+187 |                 q = query.lower()
+    -                 if not any(q in v.lower() for v in [entry["name"], entry["real_name"], entry["display_name"], entry["email"]] if v):
+188 +                 if not any(
+189 +                     q in v.lower()
+190 +                     for v in [
+191 +                         entry["name"],
+192 +                         entry["real_name"],
+193 +                         entry["display_name"],
+194 +                         entry["email"],
+195 +                     ]
+196 +                     if v
+197 +                 ):
+198 |                     continue
+--------------------------------------------------------------------------------
+218 |             profile = u.get("profile", {})
+    -             names[u["id"]] = (
+    -                 profile.get("display_name") or u.get("real_name") or u.get("name", "")
+    -             )
+219 +             names[u["id"]] = profile.get("display_name") or u.get("real_name") or u.get("name", "")
+220 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+250 |             latest = ch.get("latest")
+    -             dms.append({
+    -                 "id": ch["id"],
+    -                 "user": uid,
+    -                 "username": (names or {}).get(uid, ""),
+    -                 "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+    -             })
+251 +             dms.append(
+252 +                 {
+253 +                     "id": ch["id"],
+254 +                     "user": uid,
+255 +                     "username": (names or {}).get(uid, ""),
+256 +                     "latest": latest.get("ts", "") if isinstance(latest, dict) else "",
+257 +                 }
+258 +             )
+259 |         cursor = resp.get("response_metadata", {}).get("next_cursor")
+--------------------------------------------------------------------------------
+264 |
+    - def list_channels(client: WebClient, query: str | None = None, include_private: bool = False) -> str:
+265 + def list_channels(
+266 +     client: WebClient, query: str | None = None, include_private: bool = False
+267 + ) -> str:
+268 |     """List workspace channels.
+    |
+
+1 file would be reformatted, 3 files already formatted
+(exit code: 1)
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # parse_list_id check (unchanged)
+parse_list_id ok
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # cli wiring check (unchanged)
+cli wiring ok
+
+$ uv run --with click --with python-dotenv --with slack-sdk python -c "..."  # FIX 6 manual mock-only verification: SlackApiError side_effect -> clean stderr, no traceback, SystemExit
+items with SlackApiError side_effect: clean stderr line, no traceback, SystemExit(1) ok
+
+$ grep -q 'lists:read' CLAUDE.md && echo "grep: lists:read found in CLAUDE.md"
+grep: lists:read found in CLAUDE.md
+
+===== end of Round 4 AC run =====

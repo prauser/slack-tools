@@ -309,6 +309,312 @@ def list_usergroups(client: WebClient, include_members: bool = False) -> str:
     return json.dumps(groups, indent=2, ensure_ascii=False)
 
 
+class _CommentChannelUnreachable(RuntimeError):
+    """Raised by ``list_comments`` when the derived F->C pseudo-channel can't be
+    read.
+
+    A ``RuntimeError`` subclass so the CLI boundary keeps turning it into the
+    repo's one-line-stderr-and-exit convention, but a distinct type so a caller
+    or test can tell "the derived channel guess did not resolve" apart from any
+    other ``RuntimeError``. Nothing catches it inside this module — the message
+    is built once, at the raise site.
+    """
+
+
+# Type keys Slack attaches to a field alongside its raw ``value``. Only the first
+# two entries' relative order is measured: a field can legitimately carry both
+# "text" and "rich_text" (see the real payload in task-1's 실측 사실), and "text"
+# is the one worth surfacing as the value. The order of the remaining entries is
+# an arbitrary tie-break, not an observed fact — no payload seen so far has
+# carried more than one of them on the same field.
+_FIELD_TYPE_KEYS = (
+    ("text", "text"),
+    ("rich_text", "text"),
+    ("user", "user"),
+    ("date", "date"),
+    ("checkbox", "checkbox"),
+    ("select", "select"),
+)
+
+
+def _normalize_list_field(field: dict) -> dict:
+    """Normalize one Slack List item field, keeping both id keys and the raw value.
+
+    ``key`` and ``column_id`` can differ (observed in real payloads), so both are
+    kept — ``column_id`` is the stable lookup key, ``key`` is whatever alias the
+    list happened to use. A type key not in ``_FIELD_TYPE_KEYS`` is preserved as
+    ``"unknown"`` with ``raw`` intact rather than silently dropped.
+    """
+    raw = field.get("value")
+    field_type = "unknown"
+    value = raw
+    for type_key, type_name in _FIELD_TYPE_KEYS:
+        if type_key in field:
+            field_type = type_name
+            value = field[type_key]
+            break
+    return {
+        "column_id": field.get("column_id"),
+        "key": field.get("key"),
+        "type": field_type,
+        "value": value,
+        "raw": raw,
+    }
+
+
+def _normalize_list_item(item: dict) -> dict:
+    """Normalize one Slack List item. Only fields present in the payload survive —
+    a missing field means "unset", not "empty string", so absence is preserved
+    rather than backfilled.
+    """
+    return {
+        "id": item.get("id"),
+        "list_id": item.get("list_id"),
+        "created_by": item.get("created_by"),
+        "date_created": item.get("date_created"),
+        "updated_by": item.get("updated_by"),
+        "updated_timestamp": item.get("updated_timestamp"),
+        "fields": [_normalize_list_field(f) for f in item.get("fields", [])],
+    }
+
+
+def _validate_limit(limit: int) -> None:
+    """Reject a negative *limit* before it reaches any pagination arithmetic.
+
+    The CLI also rejects a negative ``--limit`` via ``click.IntRange(min=0)``,
+    but that only protects callers going through the CLI. A library caller
+    invoking ``list_items``/``list_comments`` directly could still pass a raw
+    negative value through; without this, ``list_comments`` in particular
+    would forward it to ``conversations.history``, which errors there, and
+    that error gets picked up by ``_history``'s client-exception guard and
+    relabeled as "comment channel not reachable ... F→C mapping" — blaming an
+    unrelated mechanism for what is actually a bad argument. Validating here,
+    in the logic layer, gives every caller (CLI or library) the same
+    guarantee regardless of entry point.
+    """
+    if limit < 0:
+        raise RuntimeError(f"Error: limit must be >= 0 (0 means 'all'), got {limit}")
+
+
+# The real WebClient raises (SlackApiError) on a logical (ok:false) failure
+# instead of ever handing back the dict — see the ``try/except`` below, which
+# is the only place that failure signal is actually observed in production.
+# No documented page-size cap for this endpoint; capped at the same 200 used
+# by conversations.history / conversations.replies for consistency.
+_LIST_ITEMS_PAGE_SIZE = 200
+
+
+def _required_list(resp: dict, key: str, context: str) -> list:
+    """Return ``resp[key]``, raising if *key* is absent or ``null`` in an
+    ``ok:true`` response.
+
+    Three response shapes are possible for a collection key, and only one of
+    them is "genuinely empty":
+
+    - ``key: []`` — a real, empty result. Returned as-is.
+    - key missing entirely — never observed from Slack for these endpoints, so
+      treated as a malformed/unexpected response rather than silently read as
+      empty (``resp.get(key, [])`` would hide this behind a false all-clear).
+    - ``key: null`` — also never observed. Nothing distinguishes "the API
+      explicitly means nothing here" from "something went wrong upstream", and
+      Slack's own convention for "nothing" elsewhere in these responses is an
+      empty list, not ``null``. Read the same way as a missing key rather than
+      silently treated as ``[]`` — a bare ``TypeError: NoneType is not
+      iterable`` at the call site would be even less informative, and (being
+      neither a caught ``RuntimeError`` nor a documented local bug) would reach
+      the CLI user as an unlabelled traceback instead of the one-line error
+      this helper exists to produce.
+    """
+    if key not in resp:
+        raise RuntimeError(
+            f"Error: {context} response has ok:true but no {key!r} key: {resp!r}"
+        )
+    value = resp[key]
+    if value is None:
+        raise RuntimeError(
+            f"Error: {context} response has ok:true but {key!r} is null, not a list: {resp!r}"
+        )
+    return value
+
+
+def list_items(client: WebClient, list_id: str, limit: int = 0) -> str:
+    """Fetch items from a Slack List (requires SLACK_USER_TOKEN with lists:read).
+
+    Bot tokens fail this endpoint with ``list_not_found`` — the list can live in
+    a workspace the bot isn't in — so this always needs the user client, never
+    a bot fallback.
+
+    Parameters
+    ----------
+    list_id : str
+        Slack List id (``F...``), already resolved from a URL if needed.
+    limit : int
+        Max items to return (default 0 = walk every page, the same ``0 = all``
+        convention as ``channel_history``/``search_messages``).
+    """
+    _validate_limit(limit)
+    fetch_all = limit == 0
+    raw_items: list[dict] = []
+    cursor = ""
+    while True:
+        # Every sibling loop in this module sends an explicit page size, on both
+        # the walk-all and the bounded path; this one now matches. On the bounded
+        # path the size is recomputed from what's still needed each iteration
+        # (not from the original *limit*), so the last page isn't over-fetched.
+        params: dict = {"list_id": list_id, "cursor": cursor}
+        if fetch_all:
+            params["limit"] = _LIST_ITEMS_PAGE_SIZE
+        else:
+            remaining = limit - len(raw_items)
+            params["limit"] = min(remaining, _LIST_ITEMS_PAGE_SIZE)
+        try:
+            # SlackApiError isn't a RuntimeError, and the CLI boundary only catches
+            # RuntimeError, so this call needs its own net rather than relying on
+            # the ok:false check below to ever fire. (Ruff doesn't flag this as a
+            # blind except: the block ends in a re-raise, not a swallow.)
+            resp = client.api_call("slackLists.items.list", params=params)
+        except Exception as exc:
+            raise RuntimeError(f"Error: slackLists.items.list failed for {list_id}: {exc}") from exc
+        if not resp.get("ok", True):
+            # Kept as a second guard in case a future SDK version returns instead of
+            # raising — cheap, but no longer the only guard (see the except above).
+            raise RuntimeError(
+                f"Error: slackLists.items.list failed for {list_id}: "
+                f"{resp.get('error', 'unknown_error')}"
+            )
+        raw_items.extend(_required_list(resp, "items", "slackLists.items.list"))
+        if not fetch_all and len(raw_items) >= limit:
+            break
+        cursor = resp.get("response_metadata", {}).get("next_cursor", "")
+        if not cursor:
+            break
+    items = [_normalize_list_item(i) for i in (raw_items if fetch_all else raw_items[:limit])]
+    return json.dumps(items, indent=2, ensure_ascii=False)
+
+
+def list_comments(client: WebClient, list_id: str, limit: int = 0) -> str:
+    """Fetch comments on a Slack List (requires SLACK_USER_TOKEN with lists:read).
+
+    Slack Lists have no comments API. Comments live as thread replies under a
+    ``USLACKBOT`` "A comment was added" message, in a pseudo-channel whose id is
+    the list id with its leading ``F`` swapped for ``C``. This mapping was
+    observed on exactly one list — it is not documented — so a lookup failure
+    here must fail loudly rather than come back as an empty (and therefore
+    indistinguishable from "no comments") result.
+
+    Parameters
+    ----------
+    list_id : str
+        Slack List id (``F...``), already resolved from a URL if needed.
+    limit : int
+        Max top-level messages to return (default 0 = all).
+    """
+    _validate_limit(limit)
+    # The F->C swap is a blind string edit, so a non-list id has to be rejected
+    # here rather than derived from. A channel id (``C...``) would survive the
+    # swap unchanged and this would happily return that channel's real messages
+    # labelled as list comments -- wrong output presented as correct, which is
+    # worse than an error.
+    if not (len(list_id) > 1 and list_id[0] == "F" and list_id[1:].isalnum()):
+        raise RuntimeError(
+            f"Error: {list_id!r} is not a Slack List id. Expected an id starting "
+            "with 'F' (or a Slack Lists URL to parse one from)."
+        )
+    comment_channel = "C" + list_id[1:]
+    fetch_all = limit == 0
+    kwargs: dict = {"channel": comment_channel, "limit": min(limit, 200) if not fetch_all else 200}
+    messages: list[dict] = []
+
+    def _fail(detail: str) -> None:
+        raise _CommentChannelUnreachable(
+            f"Error: comment channel {comment_channel} not reachable (derived from "
+            f"list id {list_id}; this F→C mapping is observed, not documented): {detail}"
+        )
+
+    def _history(**kw: object) -> dict:
+        # Only the client call itself is guarded — a bug in the normalization
+        # code below (e.g. a malformed message missing "ts") must still surface
+        # as a real traceback, not get relabeled as "channel not reachable".
+        try:
+            resp = client.conversations_history(**kw)
+        except Exception as exc:  # noqa: BLE001 — converted to the loud, labelled failure below
+            _fail(str(exc))
+        if not resp.get("ok", True):
+            _fail(resp.get("error", "unknown_error"))
+        return resp
+
+    def _replies_page(ts: str, cursor: str) -> dict:
+        kw: dict = {"channel": comment_channel, "ts": ts, "limit": 200}
+        if cursor:
+            kw["cursor"] = cursor
+        try:
+            resp = client.conversations_replies(**kw)
+        except Exception as exc:  # noqa: BLE001 — converted to the loud, labelled failure below
+            _fail(str(exc))
+        if not resp.get("ok", True):
+            _fail(resp.get("error", "unknown_error"))
+        return resp
+
+    def _replies(ts: str) -> list[dict]:
+        """Walk every page of a comment thread.
+
+        conversations.replies caps a page at 200. Stopping there dropped reply
+        201 onward with no signal -- the only trace was reply_count disagreeing
+        with len(replies), which nothing surfaced. The top-level loop already
+        walks its cursor; this is the same walk one level down.
+        """
+        out: list[dict] = []
+        cursor = ""
+        while True:
+            resp = _replies_page(ts, cursor)
+            out.extend(
+                {"ts": r.get("ts"), "user": r.get("user", ""), "text": r.get("text", "")}
+                for r in _required_list(
+                    resp, "messages", f"conversations.replies for {comment_channel}"
+                )
+                if r.get("ts") != ts
+            )
+            cursor = resp.get("response_metadata", {}).get("next_cursor", "")
+            if not cursor:
+                return out
+
+    while True:
+        resp = _history(**kwargs)
+        for m in _required_list(resp, "messages", f"conversations.history for {comment_channel}"):
+            entry = {
+                "ts": m.get("ts"),
+                "user": m.get("user", ""),
+                "text": m.get("text", ""),
+                "reply_count": m.get("reply_count", 0),
+                "replies": [],
+            }
+            if m.get("reply_count", 0) > 0:
+                entry["replies"] = _replies(m["ts"])
+            messages.append(entry)
+            # Same "walk until satisfied, then trim" shape as list_items — a
+            # single-page shortcut here would silently truncate a bounded
+            # --limit read that needs a second page to fill.
+            if not fetch_all and len(messages) >= limit:
+                break
+        if not fetch_all and len(messages) >= limit:
+            break
+        cursor = resp.get("response_metadata", {}).get("next_cursor", "")
+        if not cursor:
+            break
+        kwargs["cursor"] = cursor
+
+    if not fetch_all:
+        messages = messages[:limit]
+
+    result = {
+        "list_id": list_id,
+        "comment_channel": comment_channel,
+        "derived": True,
+        "messages": messages,
+    }
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
 def _parse_time(value: str) -> float | None:
     """Convert a time string to a Unix timestamp.
 

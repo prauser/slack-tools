@@ -58,6 +58,20 @@ bare id (`C...` public / `G...` private·그룹DM / `D...` DM) 를 넘기면
 **default 를 바꾸지 않은 이유**: 기존 호출자(예: context-central 의 `history`/`thread` cron)
 동작이 변하면 안 된다. opt-in 이어야 한다.
 
+## Slack Lists (`lists:read`)
+
+`lists items <LIST>` / `lists comments <LIST>` read Slack Lists. `<LIST>` accepts either
+a bare list id (`F...`) or the full Slack Lists URL (the id is the last path segment).
+
+| 사실 | 왜 중요한가 |
+|---|---|
+| **USER 토큰(xoxp-) 전용.** `--as-user` 옵션이 없다 — 이 명령군은 유저 토큰이 유일한 선택지다. | BOT 토큰은 `list_not_found` 로 실패한다 (리스트가 다른 워크스페이스 소속일 수 있어서). 조용한 0건이 아니라 stderr 한 줄 메시지와 함께 에러로 죽는다 — 그래도 토큰을 잘못 고르기 쉬운 지점이라 표로 남긴다. |
+| `slackLists.info` API가 없다. | **컬럼의 사람이 읽을 이름을 얻을 방법이 없다.** 출력은 `column_id` 로만 필드를 식별한다 — 이름을 지어내지 않는다. |
+| 값이 빈 필드는 API 응답의 `fields` 배열에서 아예 빠진다. | "담당자 미지정" 같은 판정은 그 `column_id` 의 **부재**로 해야 한다. item 마다 `fields` 길이가 다른 게 정상이다. |
+| `lists comments` 의 코멘트 채널 id 는 리스트 id 의 첫 글자를 `F`→`C` 로 바꿔 유도한다. | **리스트 1건에서만 관측**했다 — 문서화된 규칙이 아니다. 출력에 `comment_channel`/`derived` 를 항상 넣고, 채널 조회가 실패하면 조용히 빈 배열을 주지 않고 에러로 죽는다. |
+| `F` 로 시작하지 않는 id 는 `lists comments` 가 거부한다. | `F`→`C` 는 맹목적 문자열 치환이라 채널 id(`C…`)를 넘기면 **그대로 살아남아** 그 채널의 진짜 메시지를 리스트 코멘트라고 돌려준다. 틀린 결과를 맞는 것처럼 주는 게 에러보다 나쁘다. |
+| 코멘트 스레드의 답글은 페이지를 끝까지 걷는다. | `conversations.replies` 는 한 페이지가 200개다. 거기서 멈추면 201번째부터 신호 없이 사라지고, 유일한 흔적인 `reply_count` 와 `len(replies)` 불일치를 아무도 안 본다. |
+
 ## Search Modifiers
 
 Slack 검색 문법 사용 가능:
