@@ -16,6 +16,19 @@ _SEARCH_PAGE_SIZE = 100
 _SEARCH_PAGE_GUARD = 100
 
 
+def _reactions(m: dict) -> list[dict]:
+    """Emoji reactions as ``[{name, users}]`` — empty list when there are none.
+
+    Dropping them hid acknowledgements: a ✅ or 👍 on the message is often the
+    whole reply, and a "did I answer?" check that only reads ``text`` keeps a
+    thread open that its owner already closed with a reaction.
+    """
+    return [
+        {"name": r.get("name", ""), "users": r.get("users", [])}
+        for r in m.get("reactions", []) or []
+    ]
+
+
 def search_messages(client: WebClient, query: str, count: int = 20, sort: str = "timestamp") -> str:
     """Search messages using Slack's search API (requires user token).
 
@@ -118,6 +131,7 @@ def channel_history(
                 "thread_ts": m.get("thread_ts"),
                 "reply_count": m.get("reply_count", 0),
                 "latest_reply": m.get("latest_reply"),
+                "reactions": _reactions(m),
             })
         if not fetch_all or not resp.get("has_more"):
             break
@@ -149,6 +163,7 @@ def thread_replies(client: WebClient, channel: str, thread_ts: str) -> str:
             "ts": m.get("ts"),
             "user": m.get("user", ""),
             "text": m.get("text", ""),
+            "reactions": _reactions(m),
         })
     return json.dumps(messages, indent=2, ensure_ascii=False)
 
