@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
+import json
+
 import click
 
 if TYPE_CHECKING:
@@ -99,15 +101,23 @@ def thread(channel: str, thread_ts: str, as_user: bool):
 @main.command()
 @click.argument("channel")
 @click.argument("text")
-def post(channel: str, text: str):
+@click.option("--blocks-file", type=click.Path(exists=True, dir_okay=False),
+              help="JSON file with Block Kit blocks (a list, or {\"blocks\": [...]}). TEXT becomes the fallback.")
+def post(channel: str, text: str, blocks_file: str | None):
     """Post a message to a channel (requires SLACK_BOT_TOKEN).
 
     CHANNEL: channel ID or #channel-name.
     """
     from slack_tools.client import get_bot_client
-    from slack_tools.actions import post_message
+    from slack_tools.actions import load_blocks, post_message
 
-    click.echo(post_message(get_bot_client(), channel, text))
+    blocks = None
+    if blocks_file:
+        try:
+            blocks = load_blocks(blocks_file)
+        except (ValueError, json.JSONDecodeError) as e:
+            raise click.ClickException(str(e))
+    click.echo(post_message(get_bot_client(), channel, text, blocks))
 
 
 @main.command()
